@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-agents-visualizer:supplement:1",
+  "title": "Session supplement relations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sessions", "relations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "description": { "$ref": "#/$defs/text" },
+    "sessions": { "type": "array", "items": { "$ref": "#/$defs/session" } },
+    "relations": { "type": "array", "items": { "$ref": "#/$defs/relation" } }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+    "session": {
+      "type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 2000, "pattern": "^(claude|codex):[^\\s]+$" },
+        "name": { "$ref": "#/$defs/text" },
+        "aliases": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "project": { "$ref": "#/$defs/text" },
+        "role": { "$ref": "#/$defs/text", "description": "Logical assignment role confirmed from documents. It does not imply a spawn parent or a run status." },
+        "archived": { "type": "boolean", "description": "A session that is retired or explicitly archived. It does not change the run status." },
+        "description": { "$ref": "#/$defs/text" }
+      }
+    },
+    "relation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "from", "to", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "from": { "$ref": "#/$defs/text" },
+        "to": { "$ref": "#/$defs/text" },
+        "type": { "enum": ["spawn", "management", "dependency", "collaboration", "handoff"], "description": "management is a logical assignment from a coordinator → assigned session and is distinct from a native spawn." },
+        "description": { "$ref": "#/$defs/text" },
+        "requestId": { "$ref": "#/$defs/text" },
+        "status": { "$ref": "#/$defs/text" },
+        "confidence": { "enum": ["confirmed", "inferred", "unresolved"] },
+        "evidence": {
+          "type": "object", "additionalProperties": false,
+          "properties": { "path": { "$ref": "#/$defs/text" }, "detail": { "$ref": "#/$defs/text" } }
+        }
+      }
+    }
+  }
+}

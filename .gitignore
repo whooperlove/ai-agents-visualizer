@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+*.log
+.cache/
+coverage/
+.runtime/
+
+# Local-only working material (holds machine-specific paths and session records)
+verification/
+*.local.*
+
+# Editor workspace files
+*.code-workspace

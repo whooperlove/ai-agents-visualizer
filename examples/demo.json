@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "description": "Synthetic example. Replace the ids with auto-detected session ids to use it. It also exercises the conflict and unresolved markers. management is a logical coordinator → assignee hierarchy that is separate from spawn, and shared management is preserved.",
+  "sessions": [
+    {
+      "id": "claude:demo-parent",
+      "name": "Example parent",
+      "aliases": [
+        "demo-master"
+      ],
+      "project": "demo",
+      "role": "Example master"
+    },
+    {
+      "id": "codex:demo-child",
+      "name": "Example child",
+      "project": "demo",
+      "role": "Example director"
+    },
+    {
+      "id": "codex:demo-grandchild",
+      "name": "Example grandchild",
+      "project": "demo",
+      "role": "Example worker"
+    }
+  ],
+  "relations": [
+    {
+      "id": "parent-child",
+      "from": "demo-master",
+      "to": "codex:demo-child",
+      "type": "spawn",
+      "description": "Parent → child"
+    },
+    {
+      "id": "child-grandchild",
+      "from": "codex:demo-child",
+      "to": "codex:demo-grandchild",
+      "type": "spawn",
+      "description": "Child → grandchild"
+    },
+    {
+      "id": "waiting",
+      "from": "demo-master",
+      "to": "codex:demo-grandchild",
+      "type": "dependency",
+      "description": "The sender waits for the receiver",
+      "confidence": "unresolved"
+    },
+    {
+      "id": "conflicting-parent",
+      "from": "demo-master",
+      "to": "codex:demo-grandchild",
+      "type": "spawn",
+      "description": "Conflicting parent for verification"
+    },
+    {
+      "id": "missing",
+      "from": "codex:demo-child",
+      "to": "missing-reviewer",
+      "type": "collaboration",
+      "description": "An unresolved counterpart is preserved too"
+    },
+    {
+      "id": "master-director-management",
+      "from": "demo-master",
+      "to": "codex:demo-child",
+      "type": "management",
+      "description": "Logical coordination by the master",
+      "confidence": "confirmed"
+    },
+    {
+      "id": "director-member-management",
+      "from": "codex:demo-child",
+      "to": "codex:demo-grandchild",
+      "type": "management",
+      "description": "Work assignment by the director",
+      "confidence": "confirmed"
+    },
+    {
+      "id": "shared-member-management",
+      "from": "demo-master",
+      "to": "codex:demo-grandchild",
+      "type": "management",
+      "description": "Synthetic shared management: shown separately from a spawn-parent conflict",
+      "confidence": "confirmed"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "ai-agents-visualizer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only local observer for Claude Code and Codex session relationships",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "verify:live": "node scripts/verify-live.js"
+  },
+  "engines": { "node": ">=22" }
+}

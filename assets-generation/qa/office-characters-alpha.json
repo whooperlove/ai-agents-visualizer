@@ -1,0 +1,592 @@
+{
+  "atlas_path": "public/assets/office-characters.png",
+  "queue_job_id": "5-1792690494566-e5831f",
+  "format": "PNG",
+  "source_mode": "RGBA",
+  "size": [
+    1774,
+    887
+  ],
+  "equal_cells_exact": false,
+  "sha256": "fd836aadef42bdf9e86829c48785f25ae70b91e5067477b269045091e279de2c",
+  "queue_original_sha256": "fd836aadef42bdf9e86829c48785f25ae70b91e5067477b269045091e279de2c",
+  "byte_identical_to_queue_original": true,
+  "alpha": {
+    "extrema": [
+      0,
+      255
+    ],
+    "transparent_pixels": 1114462,
+    "partial_alpha_pixels": 457035,
+    "opaque_pixels": 2041,
+    "nontransparent_pixels": 459076,
+    "bounds_exclusive": [
+      25,
+      19,
+      1754,
+      873
+    ],
+    "content_bounds_alpha_128_exclusive": [
+      143,
+      30,
+      1661,
+      866
+    ]
+  },
+  "corner_rgba": {
+    "top_left": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "top_right": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "bottom_left": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "bottom_right": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "cells": [
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 137151,
+      "partial_alpha_pixels": 58861,
+      "opaque_pixels": 237,
+      "nontransparent_pixels": 59098,
+      "bounds_exclusive": [
+        25,
+        31,
+        423,
+        442
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        143,
+        34,
+        353,
+        436
+      ],
+      "index": 0,
+      "id": "red-headphones",
+      "column": 0,
+      "row": 0,
+      "source_rect_xywh": [
+        0,
+        0,
+        443,
+        443
+      ],
+      "equal_grid_source_rect_xywh": [
+        0,
+        0,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        25,
+        31,
+        423,
+        442
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        143,
+        34,
+        353,
+        436
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        248,
+        436
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 136007,
+      "partial_alpha_pixels": 60439,
+      "opaque_pixels": 246,
+      "nontransparent_pixels": 60685,
+      "bounds_exclusive": [
+        26,
+        26,
+        438,
+        443
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        134,
+        30,
+        327,
+        437
+      ],
+      "index": 1,
+      "id": "blue-hoodie",
+      "column": 1,
+      "row": 0,
+      "source_rect_xywh": [
+        443,
+        0,
+        444,
+        443
+      ],
+      "equal_grid_source_rect_xywh": [
+        443.5,
+        0,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        469,
+        26,
+        881,
+        443
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        577,
+        30,
+        770,
+        437
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        673.5,
+        437
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 4
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 1
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 139251,
+      "partial_alpha_pixels": 56753,
+      "opaque_pixels": 245,
+      "nontransparent_pixels": 56998,
+      "bounds_exclusive": [
+        21,
+        22,
+        440,
+        443
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        121,
+        53,
+        315,
+        435
+      ],
+      "index": 2,
+      "id": "yellow-cardigan",
+      "column": 2,
+      "row": 0,
+      "source_rect_xywh": [
+        887,
+        0,
+        443,
+        443
+      ],
+      "equal_grid_source_rect_xywh": [
+        887,
+        0,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        908,
+        22,
+        1327,
+        443
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        1008,
+        53,
+        1202,
+        435
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        1105,
+        435
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 11
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 1
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 140715,
+      "partial_alpha_pixels": 55681,
+      "opaque_pixels": 296,
+      "nontransparent_pixels": 55977,
+      "bounds_exclusive": [
+        1,
+        19,
+        422,
+        443
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        128,
+        34,
+        311,
+        435
+      ],
+      "index": 3,
+      "id": "green-engineer",
+      "column": 3,
+      "row": 0,
+      "source_rect_xywh": [
+        1330,
+        0,
+        444,
+        443
+      ],
+      "equal_grid_source_rect_xywh": [
+        1330.5,
+        0,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        1331,
+        19,
+        1752,
+        443
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        1458,
+        34,
+        1641,
+        435
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        1549.5,
+        435
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 1
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 1
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 143511,
+      "partial_alpha_pixels": 52982,
+      "opaque_pixels": 199,
+      "nontransparent_pixels": 53181,
+      "bounds_exclusive": [
+        41,
+        1,
+        442,
+        428
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        161,
+        16,
+        320,
+        422
+      ],
+      "index": 4,
+      "id": "purple-tablet",
+      "column": 0,
+      "row": 1,
+      "source_rect_xywh": [
+        0,
+        443,
+        443,
+        444
+      ],
+      "equal_grid_source_rect_xywh": [
+        0,
+        443.5,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        41,
+        444,
+        442,
+        871
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        161,
+        459,
+        320,
+        865
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        240.5,
+        865
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 135364,
+      "partial_alpha_pixels": 61544,
+      "opaque_pixels": 228,
+      "nontransparent_pixels": 61772,
+      "bounds_exclusive": [
+        32,
+        0,
+        444,
+        430
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        130,
+        17,
+        330,
+        423
+      ],
+      "index": 5,
+      "id": "orange-jacket",
+      "column": 1,
+      "row": 1,
+      "source_rect_xywh": [
+        443,
+        443,
+        444,
+        444
+      ],
+      "equal_grid_source_rect_xywh": [
+        443.5,
+        443.5,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        475,
+        443,
+        887,
+        873
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        573,
+        460,
+        773,
+        866
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        673,
+        866
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 3,
+        "right": 6,
+        "bottom": 0
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 1,
+        "right": 1,
+        "bottom": 0
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 140875,
+      "partial_alpha_pixels": 55516,
+      "opaque_pixels": 301,
+      "nontransparent_pixels": 55817,
+      "bounds_exclusive": [
+        0,
+        0,
+        421,
+        416
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        105,
+        99,
+        329,
+        398
+      ],
+      "index": 6,
+      "id": "white-robot",
+      "column": 2,
+      "row": 1,
+      "source_rect_xywh": [
+        887,
+        443,
+        443,
+        444
+      ],
+      "equal_grid_source_rect_xywh": [
+        887,
+        443.5,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        887,
+        443,
+        1308,
+        859
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        992,
+        542,
+        1216,
+        841
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        1104,
+        841
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 4,
+        "top": 7,
+        "right": 0,
+        "bottom": 0
+      },
+      "boundary_max_alpha": {
+        "left": 1,
+        "top": 1,
+        "right": 0,
+        "bottom": 0
+      }
+    },
+    {
+      "extrema": [
+        0,
+        255
+      ],
+      "transparent_pixels": 141588,
+      "partial_alpha_pixels": 55259,
+      "opaque_pixels": 289,
+      "nontransparent_pixels": 55548,
+      "bounds_exclusive": [
+        7,
+        0,
+        424,
+        416
+      ],
+      "content_bounds_alpha_128_exclusive": [
+        109,
+        96,
+        331,
+        394
+      ],
+      "index": 7,
+      "id": "teal-robot",
+      "column": 3,
+      "row": 1,
+      "source_rect_xywh": [
+        1330,
+        443,
+        444,
+        444
+      ],
+      "equal_grid_source_rect_xywh": [
+        1330.5,
+        443.5,
+        443.5,
+        443.5
+      ],
+      "visible_bounds_in_atlas_exclusive": [
+        1337,
+        443,
+        1754,
+        859
+      ],
+      "content_bounds_in_atlas_alpha_128_exclusive": [
+        1439,
+        539,
+        1661,
+        837
+      ],
+      "content_anchor_in_atlas_alpha_128": [
+        1550,
+        837
+      ],
+      "boundary_nontransparent_pixels": {
+        "left": 0,
+        "top": 4,
+        "right": 0,
+        "bottom": 0
+      },
+      "boundary_max_alpha": {
+        "left": 0,
+        "top": 1,
+        "right": 0,
+        "bottom": 0
+      }
+    }
+  ]
+}

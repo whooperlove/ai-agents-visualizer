@@ -1,0 +1,42 @@
+Office character atlas QA
+
+Source: public/assets/office-characters.png
+Size: 1774 × 887, 8-bit RGBA PNG, 993781 bytes
+Queue job: 5-1792690494566-e5831f
+Built-in image tool calls through the queue: 1, transparent_background=true, ChatGPT login
+Output SHA-256: fd836aadef42bdf9e86829c48785f25ae70b91e5067477b269045091e279de2c
+The queue's original.png and the output file are byte-identical.
+No background removal, alpha correction, cropping, resizing or regeneration was applied.
+
+Visual check
+- The 8 characters are laid out in the requested order, 4 columns × 2 rows.
+- The red headphones, blue hoodie, yellow cardigan with glasses, green jumpsuit, purple sweater with a tablet,
+  orange jacket, white robot and dark teal robot are all distinguishable.
+- The slightly top-down frontal viewpoint and the soft 3D game art style are consistent.
+- On both the white and the black diagnostic composites, a genuinely transparent background, complete full
+  bodies and clean silhouettes were confirmed.
+- There is no text, grid, checkerboard background, floor, furniture or visible shadow crossing between cells.
+
+Constraints to pass to the renderer
+- The source size does not divide evenly into 4 columns × 2 rows in whole pixels. The mathematically equal
+  cell size is 443.5 × 443.5.
+- The visible figure's center and foot baseline differ by a few pixels from cell to cell.
+- The robots' visible height is about 299/298 px, smaller than the humans' about 382-407 px.
+- Use the source as is; the runtime can adjust it with a source rectangle, a size and a floor anchor.
+- A few nearly transparent stray pixels with alpha 1 sit on some cell borders. The maximum alpha on a border
+  is 0 or 1, and every visible character with alpha >= 128 fits well inside its cell.
+- The exact display bounds and foot anchors are in assets-generation/qa/office-characters-alpha.json as
+  content_bounds_in_atlas_alpha_128_exclusive / content_anchor_in_atlas_alpha_128.
+  They are measurement masks and were not applied to the image pixels.
+
+Alpha check
+Min / max: 0 / 255
+Fully transparent pixels: 1114462
+Partially transparent pixels: 457035
+Fully opaque pixels: 2041
+Corner alpha: all 0
+Bounding box of alpha > 0 (right/bottom exclusive): [25, 19, 1754, 873]
+Bounding box of alpha >= 128 (right/bottom exclusive): [143, 30, 1661, 866]
+
+The measurements are kept in office-characters-alpha.json in the same QA folder.
+The diagnostic composites are separate QA files; the runtime atlas was not modified.
