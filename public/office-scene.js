@@ -1411,11 +1411,6 @@ var WasOfficeScene = null;
             paint2: [variant.screenKind, variant.seconds, screenSide, 0], color2: variant.accent, emissive: 1, cast: false }));
         glow(mx + normal[0] * 0.1, screenY, mz + 0.12, 0.85, variant.screenKind === 3 ? hex('ff7a7a') : variant.screenKind === 1 ? hex('ffd27a') : variant.accent,
           0.05 + 0.06 * variant.screenBrightness);
-        if (variant.notes && screenSide === side)
-        {
-          put(shapes.box('note', P(mx + normal[0] * 0.04 + Math.cos(yaw) * screenSide * 0.44, screenY + 0.22, mz + normal[2] * 0.04 - Math.sin(yaw) * screenSide * 0.44),
-            [0.06, 0.06, 0.003], 0.002, hex('f7d774'), { basis: shapes.euler(0, yaw, 0.15), cast: false }));
-        }
       });
       var screenLight = variant.screenKind === 3 ? hex('ff8f8f') : variant.screenKind === 1 ? hex('ffd9a0') : hex('9cc4ff');
       light(x, screenY, mountZ + 0.4, 0.55 + 0.55 * variant.screenBrightness, [Math.pow(screenLight[0], 2.2), Math.pow(screenLight[1], 2.2), Math.pow(screenLight[2], 2.2)]);
@@ -1605,7 +1600,7 @@ var WasOfficeScene = null;
       var mugs = ['e8e2d6', 'd9604f', '4f7fd0', 'f0b04c', '6aa58e'];
       return { seed: seed % 97, monitorSide: seed % 2 ? 1 : -1, wood: hex(woods[(seed >>> 3) % woods.length]), chair: hex(chairs[(seed >>> 6) % chairs.length]),
         mug: hex(mugs[(seed >>> 9) % mugs.length]), lamp: (seed >>> 12) % 3 === 0, plant: (seed >>> 12) % 3 === 1, papers: (seed >>> 14) % 2 === 0,
-        notes: (seed >>> 15) % 2 === 0, pedestal: (seed >>> 16) % 3 !== 0, lampColor: hex(['f0b04c', 'e8e4dc', 'd9604f'][(seed >>> 18) % 3]),
+        pedestal: (seed >>> 16) % 3 !== 0, lampColor: hex(['f0b04c', 'e8e4dc', 'd9604f'][(seed >>> 18) % 3]),
         accent: providerAccent(actor.provider), scroll: 0, screenBrightness: 1, screenKind: 0, seconds: 0, holdingMug: false };
     }
 
