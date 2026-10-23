@@ -7,6 +7,9 @@ var wasGraphColors = null;
 var wasCanvasFontFamily = "-apple-system, BlinkMacSystemFont, \"SF Pro Text\", \"Apple SD Gothic Neo\", \"Noto Sans KR\", sans-serif";
 var wasKnownStatuses = ["running", "waiting", "idle", "completed", "interrupted", "unknown"];
 var wasKnownTypes = ["management", "dependency", "spawn", "collaboration", "handoff"];
+var wasRouteRadius = 12;
+/* Distance from one card to the next in the spawn hierarchy layout: the card plus twice the former gap. */
+var wasNativeStep = { x: 322, y: 139 };
 
 /* Looks a message up in the active language. Without the catalog (plain Node require) it returns the key and never throws. */
 function wasT(key, params)
@@ -485,6 +488,21 @@ function wasRouteConnection(pair, positions, obstacles)
       var middleY = (startY + endY) / 2;
       candidates.push([{ x: fromX, y: startY }, { x: fromX, y: middleY }, { x: toX, y: middleY }, { x: toX, y: endY }]);
     }
+    // A team head with lanes to its right sends every line to them along one shared trunk.
+    [[from, to, false], [to, from, true]].forEach(function (ends)
+    {
+      var head = ends[0];
+      var member = ends[1];
+      if (head.trunkX === undefined || member.x < head.trunkX)
+      {
+        return;
+      }
+      var headY = head.y + head.height / 2;
+      var memberY = member.y + member.height / 2;
+      var trunk = [{ x: head.x + head.width, y: headY }, { x: head.trunkX, y: headY }, { x: head.trunkX, y: memberY }, { x: member.x, y: memberY }];
+      trunk.trunk = true;
+      candidates.push(ends[2] ? trunk.reverse() : trunk);
+    });
     [false, true].forEach(function (rightSide)
     {
       var lane = rightSide ? Math.max(from.x + from.width, to.x + to.width) + 18 : Math.min(from.x, to.x) - 18;
@@ -508,7 +526,7 @@ function wasRouteConnection(pair, positions, obstacles)
     {
       length += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
     }
-    var score = length + wasRouteCrossings(points, pair, obstacles) * 100000 + points.length * 3;
+    var score = length + wasRouteCrossings(points, pair, obstacles) * 100000 + points.length * 3 - (candidate.trunk ? 40 : 0);
     if (!best || score < best.score)
     {
       best = { points: points, length: length, score: score };
@@ -1818,7 +1836,8 @@ function wasProviderClass(node)
 
 function wasRenderTree()
 {
-  if (!wasState.view)
+  // Only the visible view is rendered; wasSetView renders the list when the user switches to it.
+  if (!wasState.view || wasState.viewMode !== "tree")
   {
     return;
   }
@@ -1930,8 +1949,23 @@ function wasSafeStatus(status)
   return wasKnownStatuses.indexOf(status) !== -1 ? status : "unknown";
 }
 
+/* Routes depend on a selection only through the "selected node" connection scope; otherwise a redraw is enough. */
+function wasRefreshGraphSelection(hadPair)
+{
+  if (wasElements.edgeScope.value === "selected")
+  {
+    wasUpdateGraphEdges();
+  }
+  else if (hadPair)
+  {
+    wasRenderConnectionList();
+  }
+  wasRequestGraphDraw();
+}
+
 function wasSelectNode(id, reveal, moveCamera)
 {
+  var hadPair = !!wasState.selectedPairId;
   wasState.selectedPairId = null;
   if (!wasState.model || !wasState.model.nodeMap.has(id))
   {
@@ -1972,8 +2006,7 @@ function wasSelectNode(id, reveal, moveCamera)
     wasRenderTree();
     wasRenderDetails();
     wasElements.focusBranch.disabled = false;
-    wasUpdateGraphEdges();
-    wasRequestGraphDraw();
+    wasRefreshGraphSelection(hadPair);
   }
   if (reveal)
   {
@@ -1994,6 +2027,7 @@ function wasSelectNode(id, reveal, moveCamera)
 /* Clicking an already selected session closes its detail: the side panel returns to its empty state and the wide-view overlay hides. */
 function wasCloseDetail()
 {
+  var hadPair = !!wasState.selectedPairId;
   wasState.selectedPairId = null;
   wasState.selectedId = null;
   wasElements.focusBranch.disabled = true;
@@ -2005,8 +2039,7 @@ function wasCloseDetail()
   }
   wasRenderTree();
   wasRenderDetails();
-  wasUpdateGraphEdges();
-  wasRequestGraphDraw();
+  wasRefreshGraphSelection(hadPair);
   wasElements.announcement.textContent = wasT("app.announce.detailClosed");
 }
 
@@ -2441,54 +2474,212 @@ function wasRenderDetails()
   wasElements.detail.scrollTop = scrollTop;
 }
 
+/* Columns of a member grid: close to square on screen, never wider than six cards. */
+function wasGridColumns(count)
+{
+  return count ? Math.min(count, 6, Math.max(1, Math.ceil(Math.sqrt(count * .9)))) : 0;
+}
+
+/* A row heads a team when at least one of its children is on the graph. */
+function wasHasMembers(row, byId)
+{
+  return (row.children || []).some(function (id) { return byId.has(id); });
+}
+
+/*
+ * Team layout of the operating graph. A manager heads a lane (a labelled panel) that holds its plain members in a grid
+ * below the manager card. A member that manages others becomes the head of a lane of its own, to the right of its
+ * manager's lane, so reading left to right follows the chain of management. Sessions without a team share one panel.
+ * rows come in pre-order, so walking them backwards sizes every subtree before its parent and forwards places them.
+ */
+function wasBuildTeamLayout(rows)
+{
+  var card = { width: 238, height: 100 };
+  var gap = { x: 48, y: 48 };
+  var pad = 28;
+  var head = 22;
+  var corridor = 128;
+  var bandGap = 72;
+  var treeGap = 128;
+  var byId = new Map();
+  rows.forEach(function (row) { byId.set(row.id, row); });
+  var plan = new Map();
+  for (var index = rows.length - 1; index >= 0; index -= 1)
+  {
+    var row = rows[index];
+    var members = (row.children || []).filter(function (id) { return byId.has(id); });
+    if (!members.length)
+    {
+      continue;
+    }
+    var leaves = members.filter(function (id) { return !wasHasMembers(byId.get(id), byId); });
+    var branches = members.filter(function (id) { return wasHasMembers(byId.get(id), byId); });
+    // A lane without lanes to its right lets its head join the grid; otherwise the head keeps a row to itself for the trunk.
+    var inline = !branches.length;
+    var cells = leaves.length + (inline ? 1 : 0);
+    var cols = wasGridColumns(cells);
+    var gridRows = cols ? Math.ceil(cells / cols) : 0;
+    var laneWidth = pad * 2 + Math.max(card.width, cols * card.width + Math.max(0, cols - 1) * gap.x);
+    var laneHeight = pad * 2 + head + (inline ? 0 : card.height + (gridRows ? gap.y : 0)) + (gridRows ? gridRows * card.height + (gridRows - 1) * gap.y : 0);
+    var bandHeight = Math.max(0, branches.length - 1) * bandGap;
+    var bandWidth = 0;
+    branches.forEach(function (id)
+    {
+      bandHeight += plan.get(id).height;
+      bandWidth = Math.max(bandWidth, plan.get(id).width);
+    });
+    plan.set(row.id, { members: members, leaves: leaves, branches: branches, inline: inline, cols: cols, laneWidth: laneWidth, laneHeight: laneHeight, bandHeight: bandHeight, width: laneWidth + (branches.length ? corridor + bandWidth : 0), height: Math.max(laneHeight, bandHeight) });
+  }
+  var positions = new Map();
+  var lanes = [];
+  var origins = new Map();
+  var solo = [];
+  var top = 40;
+  rows.forEach(function (row)
+  {
+    var info = plan.get(row.id);
+    if (!row.depth)
+    {
+      if (!info)
+      {
+        solo.push(row);
+        return;
+      }
+      origins.set(row.id, { x: 40, y: top });
+      top += info.height + treeGap;
+    }
+    if (!info)
+    {
+      return;
+    }
+    var origin = origins.get(row.id);
+    if (!origin)
+    {
+      return;
+    }
+    var lane = { id: row.id, ids: [row.id].concat(info.members), x: origin.x, y: origin.y + (info.height - info.laneHeight) / 2, width: info.laneWidth, height: info.laneHeight, count: info.members.length, solo: false };
+    lanes.push(lane);
+    var headPoint = { x: lane.x + pad, y: lane.y + pad + head, width: card.width, height: card.height, row: row, lane: lane };
+    if (info.branches.length)
+    {
+      headPoint.trunkX = lane.x + lane.width + corridor / 2;
+    }
+    positions.set(row.id, headPoint);
+    var gridTop = lane.y + pad + head + (info.inline ? 0 : card.height + gap.y);
+    info.leaves.forEach(function (id, index)
+    {
+      var slot = index + (info.inline ? 1 : 0);
+      positions.set(id, { x: lane.x + pad + slot % info.cols * (card.width + gap.x), y: gridTop + Math.floor(slot / info.cols) * (card.height + gap.y), width: card.width, height: card.height, row: byId.get(id), leafOf: row.id });
+    });
+    var bandTop = origin.y + (info.height - info.bandHeight) / 2;
+    info.branches.forEach(function (id)
+    {
+      origins.set(id, { x: lane.x + lane.width + corridor, y: bandTop });
+      bandTop += plan.get(id).height + bandGap;
+    });
+  });
+  if (solo.length)
+  {
+    var soloCols = wasGridColumns(solo.length);
+    var panel = solo.length > 1;
+    var inset = panel ? pad : 0;
+    var soloTop = top + (panel ? head + pad : 0);
+    solo.forEach(function (row, slot)
+    {
+      positions.set(row.id, { x: 40 + inset + slot % soloCols * (card.width + gap.x), y: soloTop + Math.floor(slot / soloCols) * (card.height + gap.y), width: card.width, height: card.height, row: row });
+    });
+    if (panel)
+    {
+      lanes.push({ id: "", ids: solo.map(function (row) { return row.id; }), x: 40, y: top, width: pad * 2 + soloCols * card.width + (soloCols - 1) * gap.x, height: pad * 2 + head + Math.ceil(solo.length / soloCols) * card.height + (Math.ceil(solo.length / soloCols) - 1) * gap.y, count: solo.length, solo: true });
+    }
+  }
+  return { positions: positions, lanes: lanes };
+}
+
+/* A management or spawn line between a team head and a member in its own lane adds nothing the lane does not already say. */
+function wasIsContainedPair(pair, positions)
+{
+  var from = positions.get(pair.from);
+  var to = positions.get(pair.to);
+  if (!from || !to || pair.conflicts.length || pair.deliveryCount || (from.leafOf !== pair.to && to.leafOf !== pair.from))
+  {
+    return false;
+  }
+  return pair.types.every(function (type) { return type === "management" || type === "spawn"; });
+}
+
+/* Lanes sit under everything else: a soft panel per team with its caption. */
+function wasDrawLanes(context, viewport, camera, focus, detail)
+{
+  var unit = 1 / Math.max(.5, camera.scale);
+  context.lineWidth = unit;
+  wasState.graphLanes.forEach(function (lane)
+  {
+    if (lane.x > viewport.right || lane.x + lane.width < viewport.left || lane.y > viewport.bottom || lane.y + lane.height < viewport.top)
+    {
+      return;
+    }
+    var involved = !focus || lane.ids.some(function (id) { return focus.ids.has(id); });
+    context.globalAlpha = involved ? 1 : .45;
+    context.fillStyle = wasGraphColors.lane;
+    context.strokeStyle = wasGraphColors.laneStroke;
+    wasCanvasRoundRect(context, lane.x, lane.y, lane.width, lane.height, 18);
+    context.fill();
+    context.stroke();
+    if (detail !== "block" && camera.scale >= .4)
+    {
+      context.font = "600 11px " + wasCanvasFontFamily;
+      context.fillStyle = wasGraphColors.muted;
+      context.fillText(wasT(lane.solo ? "app.lane.solo" : "app.lane.team", { count: lane.count }), lane.x + 16, lane.y + 24);
+    }
+  });
+  context.globalAlpha = 1;
+}
+
 function wasBuildGraph()
 {
+  // Layout and routing are the costly part of the graph: a hidden graph only remembers that it is out of date.
+  if (wasState.viewMode !== "graph")
+  {
+    wasState.graphStale = true;
+    return;
+  }
   var positions = new Map();
   var maxX = 0;
+  var maxY = 0;
   var operating = wasElements.graphLayout.value === "operating";
   wasState.operatingView = wasBuildOperatingView(wasState.model, wasState.view, Object.assign(wasReadFilters(), { focusId: wasState.focusId }), wasState.expanded, wasElements.showQuiet.checked);
   wasState.graphRows = operating ? wasState.operatingView.rows : wasState.view.rows;
   wasElements.quietCount.textContent = wasFormatNumber(wasState.operatingView.quiet.size);
-  var levels = new Map();
-  var levelOffsets = new Map();
-  var maxY = 0;
+  wasState.graphLanes = [];
   if (operating)
   {
-    wasState.graphRows.forEach(function (row)
+    var layout = wasBuildTeamLayout(wasState.graphRows);
+    positions = layout.positions;
+    wasState.graphLanes = layout.lanes;
+  }
+  else
+  {
+    wasState.graphRows.forEach(function (row, index)
     {
-      if (!levels.has(row.depth))
-      {
-        levels.set(row.depth, []);
-      }
-      levels.get(row.depth).push(row);
-    });
-    var nextX = 54;
-    Array.from(levels.keys()).sort(function (first, second) { return first - second; }).forEach(function (depth)
-    {
-      levelOffsets.set(depth, nextX);
-      nextX += Math.ceil(levels.get(depth).length / 5) * 270 + 32;
+      positions.set(row.id, { x: 38 + row.depth * wasNativeStep.x, y: 38 + index * wasNativeStep.y, width: 228, height: 77, row: row });
     });
   }
-  wasState.graphRows.forEach(function (row, index)
+  positions.forEach(function (point)
   {
-    var point = { x: 38 + row.depth * 275, y: 38 + index * 108, width: 228, height: 77, row: row };
-    if (operating)
-    {
-      var level = levels.get(row.depth);
-      var slot = level.indexOf(row);
-      point.x = levelOffsets.get(row.depth) + Math.floor(slot / 5) * 270;
-      point.y = 64 + (slot % 5) * 128 + (5 - Math.min(5, level.length)) * 64;
-      point.width = 238;
-      point.height = 100;
-    }
     maxX = Math.max(maxX, point.x + point.width);
     maxY = Math.max(maxY, point.y + point.height);
-    positions.set(row.id, point);
+  });
+  wasState.graphLanes.forEach(function (lane)
+  {
+    maxX = Math.max(maxX, lane.x + lane.width);
+    maxY = Math.max(maxY, lane.y + lane.height);
   });
   wasState.graphPositions = positions;
   wasState.graphBounds = { width: maxX + 54, height: maxY + 64 };
   wasElements.empty.hidden = wasState.viewMode === "graph" ? wasState.graphRows.length > 0 : wasState.view.rows.length > 0;
   wasUpdateGraphEdges();
+  wasState.graphStale = false;
   if (!wasState.graphInitialized && wasState.view.rows.length && wasState.viewMode === "graph")
   {
     wasFitGraph();
@@ -2501,6 +2692,11 @@ function wasUpdateGraphEdges()
 {
   if (!wasState.model || !wasState.graphPositions)
   {
+    return;
+  }
+  if (wasState.viewMode !== "graph")
+  {
+    wasState.graphStale = true;
     return;
   }
   var selectedPairId = wasState.selectedPairId;
@@ -2539,7 +2735,18 @@ function wasUpdateGraphEdges()
     return true;
   });
   wasState.graphEdges = wasBundleConnections(wasState.graphEdges, wasState.model.edgeIssues);
+  wasState.graphEdges.forEach(function (pair)
+  {
+    pair.contained = wasIsContainedPair(pair, positions);
+  });
   var obstacles = wasBuildObstacleIndex(positions);
+  // A lane's caption is no place for a label, but lines may still cross it.
+  var captions = new Map(positions);
+  wasState.graphLanes.forEach(function (lane, index)
+  {
+    captions.set("lane:" + index, { x: lane.x, y: lane.y, width: Math.min(lane.width, 210), height: 28 });
+  });
+  var labelObstacles = wasBuildObstacleIndex(captions);
   wasState.graphObstacles = obstacles;
   wasState.graphRoutes = new Map();
   wasState.graphDeliveries = new Map();
@@ -2563,12 +2770,16 @@ function wasUpdateGraphEdges()
     var label = wasConnectionLabel(pair);
     var direction = wasConnectionDirectionLabel(pair, route);
     label += direction ? "  |  " + direction : "";
-    var labelWidth = (context ? context.measureText(label).width : label.length * 7) + 16;
-    var placement = wasPlaceConnectionLabel(route, labelWidth, 22, obstacles, labels);
+    var labelWidth = (context ? context.measureText(label).width : label.length * 7) + 22;
+    var placement = wasPlaceConnectionLabel(route, labelWidth, 22, labelObstacles, labels);
     route.badge = { text: label, x: placement.x, y: placement.y, width: labelWidth, height: 22 };
-    labels.push({ left: placement.x - labelWidth / 2, right: placement.x + labelWidth / 2, top: placement.y - 11, bottom: placement.y + 11 });
-    maxX = Math.max(maxX, placement.x + labelWidth / 2);
-    maxY = Math.max(maxY, placement.y + 11);
+    if (!pair.contained)
+    {
+      // A line the lane already says is drawn only while it is in focus, so its label claims no room.
+      labels.push({ left: placement.x - labelWidth / 2, right: placement.x + labelWidth / 2, top: placement.y - 11, bottom: placement.y + 11 });
+      maxX = Math.max(maxX, placement.x + labelWidth / 2);
+      maxY = Math.max(maxY, placement.y + 11);
+    }
     wasState.graphRoutes.set(pair.id, route);
     pair.forward.messages.concat(pair.reverse.messages).forEach(function (edge)
     {
@@ -2605,6 +2816,11 @@ function wasUpdateGraphEdges()
   if (counts.scope)
   {
     omitted.push(wasT("app.graph.omitScope", { number: wasFormatNumber(counts.scope) }));
+  }
+  var inLanes = wasState.graphEdges.filter(function (pair) { return pair.contained; }).length;
+  if (inLanes)
+  {
+    omitted.push(wasT("app.graph.omitLanes", { number: wasFormatNumber(inLanes) }));
   }
   wasElements.graphCount.textContent = wasT("app.graph.count", { visible: wasFormatNumber(counts.visible), total: wasFormatNumber(wasState.model.edges.length), connections: wasFormatNumber(wasState.graphEdges.length) });
   wasElements.graphCount.title = omitted.length ? wasT("app.graph.hiddenRelations", { list: omitted.join(" · ") }) : wasT("app.graph.allShown");
@@ -2645,6 +2861,169 @@ function wasRequestGraphDraw()
   });
 }
 
+/* The route as the canvas draws it, with its rounded corners sampled into points and a running distance, for beams to follow. */
+function wasRouteCurve(route)
+{
+  if (route.curve)
+  {
+    return route.curve;
+  }
+  var points = route.points;
+  var out = [{ x: points[0].x, y: points[0].y, d: 0 }];
+  var length = 0;
+  var push = function (x, y)
+  {
+    var last = out[out.length - 1];
+    length += Math.hypot(x - last.x, y - last.y);
+    out.push({ x: x, y: y, d: length });
+  };
+  for (var index = 1; index < points.length - 1; index += 1)
+  {
+    var previous = points[index - 1];
+    var corner = points[index];
+    var next = points[index + 1];
+    var before = Math.hypot(corner.x - previous.x, corner.y - previous.y);
+    var after = Math.hypot(next.x - corner.x, next.y - corner.y);
+    var radius = Math.min(wasRouteRadius, before / 2, after / 2);
+    var startX = before ? corner.x - (corner.x - previous.x) / before * radius : corner.x;
+    var startY = before ? corner.y - (corner.y - previous.y) / before * radius : corner.y;
+    var endX = after ? corner.x + (next.x - corner.x) / after * radius : corner.x;
+    var endY = after ? corner.y + (next.y - corner.y) / after * radius : corner.y;
+    push(startX, startY);
+    for (var step = 1; step < 6; step += 1)
+    {
+      var t = step / 6;
+      push((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * corner.x + t * t * endX, (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * corner.y + t * t * endY);
+    }
+    push(endX, endY);
+  }
+  push(points[points.length - 1].x, points[points.length - 1].y);
+  route.curve = { points: out, length: length };
+  return route.curve;
+}
+
+/* The points of the drawn route between two distances (either order), including the ones in between. */
+function wasCurveSlice(curve, first, second)
+{
+  var from = Math.max(0, Math.min(curve.length, Math.min(first, second)));
+  var to = Math.max(0, Math.min(curve.length, Math.max(first, second)));
+  var at = function (distance)
+  {
+    for (var index = 1; index < curve.points.length; index += 1)
+    {
+      var end = curve.points[index];
+      if (distance <= end.d || index === curve.points.length - 1)
+      {
+        var start = curve.points[index - 1];
+        var fraction = end.d > start.d ? Math.max(0, Math.min(1, (distance - start.d) / (end.d - start.d))) : 0;
+        return { x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction };
+      }
+    }
+    return { x: curve.points[0].x, y: curve.points[0].y };
+  };
+  var slice = [at(from)];
+  curve.points.forEach(function (point)
+  {
+    if (point.d > from && point.d < to)
+    {
+      slice.push({ x: point.x, y: point.y });
+    }
+  });
+  slice.push(at(to));
+  return slice;
+}
+
+/* How far the head of a connection's one beam has travelled at a moment, or null while it rests before the next run. */
+function wasLaserHead(length, seconds, seed, still)
+{
+  if (still)
+  {
+    return length * .72;
+  }
+  var head = (seconds * 300 + seed) % (length + 84 + 160);
+  return head < length + 84 ? head : null;
+}
+
+/* Each connection keeps its own beam color, handed out in the order connections are first seen. */
+function wasLaserColor(id)
+{
+  if (!wasState.laserColors.has(id))
+  {
+    wasState.laserColors.set(id, wasGraphColors["laser" + (wasState.laserColors.size % 8 + 1)]);
+  }
+  return wasState.laserColors.get(id);
+}
+
+function wasStrokeCurve(context, points)
+{
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (var index = 1; index < points.length; index += 1)
+  {
+    context.lineTo(points[index].x, points[index].y);
+  }
+  context.stroke();
+}
+
+/*
+ * A beam is a stretch of the line itself that glows brighter, in the color of its connection and exactly as wide as the line:
+ * it brightens from its tail to its head. head is the distance travelled; reverse runs it from the end of the route to the start.
+ */
+function wasDrawLaser(context, curve, head, reverse, color, width, alpha)
+{
+  var beam = 84;
+  var tail = Math.max(0, head - beam);
+  var front = Math.min(head, curve.length);
+  if (front <= tail || alpha <= 0)
+  {
+    return;
+  }
+  var steps = 10;
+  var path = function (distance) { return reverse ? curve.length - distance : distance; };
+  context.lineCap = "butt";
+  context.lineJoin = "round";
+  context.strokeStyle = color;
+  context.lineWidth = width;
+  for (var step = 0; step < steps; step += 1)
+  {
+    context.globalAlpha = alpha * Math.pow((step + 1) / steps, 1.5);
+    wasStrokeCurve(context, wasCurveSlice(curve, path(tail + (front - tail) * step / steps), path(tail + (front - tail) * (step + 1) / steps)));
+  }
+}
+
+/* The beam of every connection that still carries an unresolved delivery, drawn after all lines so none is covered. */
+function wasDrawFlows(context, entries, camera, now)
+{
+  var unit = 1 / Math.max(.45, camera.scale);
+  context.globalCompositeOperation = "lighter";
+  entries.forEach(function (entry)
+  {
+    if (!entry.style.flowing || entry.muted)
+    {
+      return;
+    }
+    var curve = wasRouteCurve(entry.route);
+    var head = wasLaserHead(curve.length, now / 1000, wasRouteSeed(entry.pair.id), wasState.reducedMotion.matches);
+    if (head !== null)
+    {
+      wasDrawLaser(context, curve, head, !entry.style.forward, wasLaserColor(entry.pair.id), [1.2, 1.5, 1.9, 2.4][entry.level] * unit, entry.level ? .9 : .2);
+    }
+  });
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = 1;
+}
+
+/* A stable offset in [0, 220) for an id, so beams of different connections do not run in step. */
+function wasRouteSeed(id)
+{
+  var hash = 0;
+  for (var index = 0; index < id.length; index += 1)
+  {
+    hash = (hash * 31 + id.charCodeAt(index)) % 2203;
+  }
+  return hash % 220;
+}
+
 function wasDrawObservationPulses(context)
 {
   var now = Date.now();
@@ -2656,6 +3035,7 @@ function wasDrawObservationPulses(context)
   {
     return;
   }
+  var unit = 1 / Math.max(.5, wasState.camera.scale);
   wasState.flowPulses.forEach(function (pulse)
   {
     var pair = wasState.graphDeliveries.get(wasMessageId(pulse.edge));
@@ -2665,20 +3045,11 @@ function wasDrawObservationPulses(context)
       return;
     }
     var progress = (now - pulse.startedAt) / 1600;
-    var forward = pulse.edge.from === pair.from;
-    var position = wasPointOnRoute(route, forward ? progress : 1 - progress);
-    context.globalAlpha = .95;
-    context.fillStyle = pulse.replay ? wasGraphColors.pulseReplay : wasGraphColors.pulseLive;
-    context.beginPath();
-    context.arc(position.x, position.y, 4 / Math.max(.5, wasState.camera.scale), 0, Math.PI * 2);
-    context.fill();
-    context.strokeStyle = context.fillStyle;
-    context.lineWidth = 2 / Math.max(.5, wasState.camera.scale);
-    var angle = position.angle + (forward ? 0 : Math.PI);
-    context.beginPath();
-    context.moveTo(position.x - Math.cos(angle) * 11, position.y - Math.sin(angle) * 11);
-    context.lineTo(position.x, position.y);
-    context.stroke();
+    var curve = wasRouteCurve(route);
+    var color = wasLaserColor(pair.id);
+    context.globalCompositeOperation = "lighter";
+    wasDrawLaser(context, curve, progress * (curve.length + 84), pulse.edge.from !== pair.from, color, 2.4 * unit, pulse.replay ? .6 : 1);
+    context.globalCompositeOperation = "source-over";
     [pulse.edge.from, pulse.edge.to].forEach(function (id)
     {
       var point = wasState.graphPositions.get(id);
@@ -2688,7 +3059,7 @@ function wasDrawObservationPulses(context)
       }
       var spread = 3 + progress * 13;
       context.globalAlpha = (1 - progress) * .8;
-      context.strokeStyle = wasMessageResolved(pulse.edge) ? wasGraphColors.teal : wasGraphColors.collaboration;
+      context.strokeStyle = color;
       context.lineWidth = 2 / Math.max(.4, wasState.camera.scale);
       wasCanvasRoundRect(context, point.x - spread, point.y - spread, point.width + spread * 2, point.height + spread * 2, 12);
       context.stroke();
@@ -2702,7 +3073,11 @@ function wasRenderGraphStatus()
   var replaying = wasState.flowPulses.some(function (pulse) { return pulse.replay; });
   var observing = wasState.flowPulses.length;
   var replay = wasState.replayStatus;
-  wasElements.sceneStatus.textContent = replay ? wasReplayStatusText(replay) : replaying ? wasT("app.graphStatus.replaying") : observing ? wasT("app.graphStatus.observing") : wasT("app.graphStatus.quiet");
+  var text = replay ? wasReplayStatusText(replay) : replaying ? wasT("app.graphStatus.replaying") : observing ? wasT("app.graphStatus.observing") : wasT("app.graphStatus.quiet");
+  if (wasElements.sceneStatus.textContent !== text)
+  {
+    wasElements.sceneStatus.textContent = text;
+  }
 }
 
 function wasReplayStatusText(replay)
@@ -2729,13 +3104,10 @@ function wasScheduleGraphAnimation()
   {
     return;
   }
-  var running = wasState.graphRows.some(function (row)
+  // graphLive is set by the last draw: the redraw period in ms that what is on screen needs, 0 when nothing moves.
+  if (observing || wasState.graphLive)
   {
-    return wasState.model.nodeMap.get(row.id).status === "running" && wasState.model.activity.get(row.id).category === "recent";
-  });
-  if (observing || running && wasElements.graphLayout.value === "operating")
-  {
-    wasState.animationTimer = setTimeout(wasRequestGraphDraw, observing ? 90 : 500);
+    wasState.animationTimer = setTimeout(wasRequestGraphDraw, observing ? 50 : wasState.graphLive);
   }
 }
 
@@ -3139,6 +3511,19 @@ function wasReadGraphPalette()
     canvasBg: ["--was-canvas-bg", "#0f1216"],
     canvasGrid: ["--was-canvas-grid", "#242a33"],
     node: ["--was-node", "#1b2027"],
+    nodeTop: ["--was-node-top", "#252c36"],
+    nodeHover: ["--was-node-hover", "#46505e"],
+    minimapBg: ["--was-minimap-bg", "#12161b"],
+    laser1: ["--was-laser-1", "#22d3ee"],
+    laser2: ["--was-laser-2", "#a3e635"],
+    laser3: ["--was-laser-3", "#f472b6"],
+    laser4: ["--was-laser-4", "#fbbf24"],
+    laser5: ["--was-laser-5", "#818cf8"],
+    laser6: ["--was-laser-6", "#fb7185"],
+    laser7: ["--was-laser-7", "#34d399"],
+    laser8: ["--was-laser-8", "#fb923c"],
+    lane: ["--was-lane", "#141920"],
+    laneStroke: ["--was-lane-stroke", "#2a313b"],
     nodeContext: ["--was-node-context", "#171b21"],
     nodePast: ["--was-node-past", "#131619"],
     nodeSelected: ["--was-node-selected", "#2a2119"],
@@ -3252,20 +3637,32 @@ function wasCanvasText(context, value, maxWidth)
   return text.slice(0, start) + "…";
 }
 
+/* Level of detail of the graph: tinted blocks, names only, then the full card. */
+function wasGraphDetail(scale)
+{
+  return scale < .3 ? "block" : scale < .55 ? "name" : "full";
+}
+
+function wasRamp(value, low, high)
+{
+  return Math.max(0, Math.min(1, (value - low) / (high - low)));
+}
+
+/* Rounds the corners of an orthogonal route; the route points themselves stay untouched. */
 function wasDrawRoute(context, route)
 {
+  var points = route.points;
   context.beginPath();
-  route.points.forEach(function (point, index)
+  context.moveTo(points[0].x, points[0].y);
+  for (var index = 1; index < points.length - 1; index += 1)
   {
-    if (!index)
-    {
-      context.moveTo(point.x, point.y);
-    }
-    else
-    {
-      context.lineTo(point.x, point.y);
-    }
-  });
+    var previous = points[index - 1];
+    var corner = points[index];
+    var next = points[index + 1];
+    var radius = Math.min(wasRouteRadius, Math.hypot(corner.x - previous.x, corner.y - previous.y) / 2, Math.hypot(next.x - corner.x, next.y - corner.y) / 2);
+    context.arcTo(corner.x, corner.y, next.x, next.y, radius);
+  }
+  context.lineTo(points[points.length - 1].x, points[points.length - 1].y);
   context.stroke();
 }
 
@@ -3273,20 +3670,203 @@ function wasDrawRouteArrow(context, route, reverse, scale)
 {
   var point = wasPointOnRoute(route, reverse ? 0 : 1);
   var angle = point.angle + (reverse ? Math.PI : 0);
-  var size = 7 / Math.max(.6, scale);
+  var size = 8 / Math.max(.6, scale);
+  var cos = Math.cos(angle);
+  var sin = Math.sin(angle);
   context.beginPath();
   context.moveTo(point.x, point.y);
-  context.lineTo(point.x - size * Math.cos(angle - .5), point.y - size * Math.sin(angle - .5));
-  context.lineTo(point.x - size * Math.cos(angle + .5), point.y - size * Math.sin(angle + .5));
+  context.lineTo(point.x - size * cos + size * .5 * sin, point.y - size * sin - size * .5 * cos);
+  context.lineTo(point.x - size * .7 * cos, point.y - size * .7 * sin);
+  context.lineTo(point.x - size * cos - size * .5 * sin, point.y - size * sin + size * .5 * cos);
   context.closePath();
   context.fill();
 }
 
-function wasDrawConnections(context, viewport, camera)
+/* The point of a route that is closest to (x, y); a label uses it to draw its leader line. */
+function wasRouteAnchor(route, x, y)
+{
+  var best = { x: route.points[0].x, y: route.points[0].y, distance: Infinity };
+  for (var index = 1; index < route.points.length; index += 1)
+  {
+    var start = route.points[index - 1];
+    var end = route.points[index];
+    var dx = end.x - start.x;
+    var dy = end.y - start.y;
+    var length = dx * dx + dy * dy;
+    var fraction = length ? Math.max(0, Math.min(1, ((x - start.x) * dx + (y - start.y) * dy) / length)) : 0;
+    var px = start.x + dx * fraction;
+    var py = start.y + dy * fraction;
+    var distance = Math.hypot(x - px, y - py);
+    if (distance < best.distance)
+    {
+      best = { x: px, y: py, distance: distance };
+    }
+  }
+  return best;
+}
+
+/* Lines are always solid; the weakest evidence of a pair is only named here, and counted in the label. */
+function wasConnectionStyle(pair)
+{
+  var evidence = pair.confidenceCounts.unresolved ? "unresolved" : pair.confidenceCounts.inferred ? "inferred" : "confirmed";
+  return {
+    evidence: evidence,
+    flowing: pair.unresolved > 0,
+    forward: pair.forward.unresolved >= pair.reverse.unresolved
+  };
+}
+
+function wasGraphNeighbors(edges, id)
+{
+  var ids = new Set([id]);
+  edges.forEach(function (pair)
+  {
+    if (pair.from === id)
+    {
+      ids.add(pair.to);
+    }
+    else if (pair.to === id)
+    {
+      ids.add(pair.from);
+    }
+  });
+  return ids;
+}
+
+/* What stays sharp while a node or connection is selected (or only hovered, which dims less); everything else is veiled. */
+function wasGraphFocus()
+{
+  var selectedId = wasState.graphPositions.has(wasState.selectedId) ? wasState.selectedId : "";
+  var selected = !!(wasState.selectedPairId || selectedId);
+  var pairId = wasState.selectedPairId || (selected ? "" : wasState.hoverPairId);
+  var anchor = pairId ? "" : selectedId || wasState.hoverId;
+  if (!pairId && !(anchor && wasState.graphPositions.has(anchor)))
+  {
+    return null;
+  }
+  var ids = new Set();
+  if (pairId)
+  {
+    var pair = wasState.graphEdges.find(function (entry) { return entry.id === pairId; });
+    if (!pair)
+    {
+      return null;
+    }
+    ids.add(pair.from);
+    ids.add(pair.to);
+  }
+  else
+  {
+    ids = wasGraphNeighbors(wasState.graphEdges, anchor);
+  }
+  return { ids: ids, pairId: pairId, anchor: anchor, soft: !selected };
+}
+
+function wasStrokeConnection(context, entry, camera, now)
+{
+  var pair = entry.pair;
+  var style = entry.style;
+  var unit = 1 / Math.max(.45, camera.scale);
+  var alpha = [.1, entry.muted ? .4 : .8, 1, 1][entry.level];
+  context.globalAlpha = alpha;
+  context.strokeStyle = entry.color;
+  context.fillStyle = entry.color;
+  context.lineWidth = [1.2, 1.5, 1.9, 2.4][entry.level] * unit;
+  context.lineCap = "butt";
+  if (entry.level === 3)
+  {
+    context.shadowColor = entry.color;
+    context.shadowBlur = 10 * wasState.pixelRatio;
+  }
+  wasDrawRoute(context, entry.route);
+  context.shadowBlur = 0;
+  context.shadowColor = "transparent";
+  context.globalAlpha = alpha;
+  if (pair.forward.edges.length)
+  {
+    wasDrawRouteArrow(context, entry.route, false, camera.scale);
+  }
+  if (pair.reverse.edges.length)
+  {
+    wasDrawRouteArrow(context, entry.route, true, camera.scale);
+  }
+}
+
+function wasDrawConnectionLabel(context, entry, camera)
+{
+  var pair = entry.pair;
+  var badge = entry.route.badge;
+  var unit = 1 / Math.max(.45, camera.scale);
+  var left = badge.x - badge.width / 2;
+  var top = badge.y - badge.height / 2;
+  var alpha = [.12, entry.muted ? .62 : .96, 1, 1][entry.level];
+  var anchor = wasRouteAnchor(entry.route, badge.x, badge.y);
+  var edgeX = Math.max(left, Math.min(left + badge.width, anchor.x));
+  var edgeY = Math.max(top, Math.min(top + badge.height, anchor.y));
+  if (Math.hypot(anchor.x - edgeX, anchor.y - edgeY) > 5)
+  {
+    context.globalAlpha = alpha * .7;
+    context.strokeStyle = entry.color;
+    context.lineWidth = unit;
+    context.beginPath();
+    context.moveTo(anchor.x, anchor.y);
+    context.lineTo(edgeX, edgeY);
+    context.stroke();
+  }
+  context.globalAlpha = alpha;
+  context.font = "500 11px " + wasCanvasFontFamily;
+  context.fillStyle = pair.conflicts.length ? wasGraphColors.conflictFill : wasGraphColors.labelBg;
+  context.strokeStyle = pair.conflicts.length ? wasGraphColors.conflict : entry.level === 3 ? entry.color : wasGraphColors.labelStroke;
+  context.lineWidth = (entry.level === 3 || pair.conflicts.length ? 1.2 : .8) * unit;
+  wasCanvasRoundRect(context, left, top, badge.width, badge.height, badge.height / 2);
+  context.fill();
+  context.stroke();
+  var step = (badge.height - 10) / pair.types.length;
+  pair.types.forEach(function (type, index)
+  {
+    context.fillStyle = entry.muted ? wasGraphColors.edgeMuted : wasGraphColors[type] || wasGraphColors.muted;
+    context.fillRect(left + 7, top + 5 + step * index, 3, step);
+  });
+  context.fillStyle = pair.conflicts.length ? wasGraphColors.conflictText : entry.level === 3 ? wasGraphColors.text : wasGraphColors.labelText;
+  context.textAlign = "center";
+  context.fillText(badge.text, badge.x + 2, badge.y + 4);
+  context.textAlign = "left";
+  if (entry.level)
+  {
+    wasState.graphLabelHits.push({ id: pair.id, left: left, top: top, right: left + badge.width, bottom: top + badge.height });
+  }
+}
+
+/* Zoomed out, only a connection in focus or in conflict keeps a mark: a dot on its line with one colored slice per relation type. */
+function wasDrawConnectionDot(context, entry, camera)
+{
+  var pair = entry.pair;
+  var unit = 1 / camera.scale;
+  var radius = 4 * unit;
+  var center = entry.route.label;
+  var tau = Math.PI * 2;
+  context.globalAlpha = [.3, entry.muted ? .6 : .95, 1, 1][entry.level];
+  pair.types.forEach(function (type, index)
+  {
+    context.fillStyle = entry.muted ? wasGraphColors.edgeMuted : wasGraphColors[type] || wasGraphColors.muted;
+    context.beginPath();
+    context.moveTo(center.x, center.y);
+    context.arc(center.x, center.y, radius, tau * index / pair.types.length - Math.PI / 2, tau * (index + 1) / pair.types.length - Math.PI / 2);
+    context.closePath();
+    context.fill();
+  });
+  context.strokeStyle = pair.conflicts.length ? wasGraphColors.conflict : wasGraphColors.canvasBg;
+  context.lineWidth = 1.4 * unit;
+  context.beginPath();
+  context.arc(center.x, center.y, radius, 0, tau);
+  context.stroke();
+  wasState.graphLabelHits.push({ id: pair.id, left: center.x - radius * 1.4, top: center.y - radius * 1.4, right: center.x + radius * 1.4, bottom: center.y + radius * 1.4 });
+}
+
+function wasDrawConnections(context, viewport, camera, focus, now, detail)
 {
   wasState.graphLabelHits = [];
   var visible = [];
-  context.setLineDash([]);
   context.lineJoin = "round";
   wasState.graphEdges.forEach(function (pair)
   {
@@ -3295,54 +3875,65 @@ function wasDrawConnections(context, viewport, camera)
     {
       return;
     }
-    var selected = wasState.selectedPairId ? pair.id === wasState.selectedPairId : pair.from === wasState.selectedId || pair.to === wasState.selectedId;
-    var muted = wasState.model.activity.get(pair.from).category !== "recent" && wasState.model.activity.get(pair.to).category !== "recent";
-    var color = pair.conflicts.length ? wasGraphColors.conflict : muted ? wasGraphColors.edgeMuted : (wasGraphColors[pair.type] || wasGraphColors.muted);
-    context.strokeStyle = color;
-    context.fillStyle = color;
-    context.globalAlpha = selected ? 1 : (wasState.selectedPairId || wasState.selectedId ? .2 : muted ? .34 : .62);
-    context.lineWidth = (selected ? 2 : 1.3) / Math.max(.45, camera.scale);
-    wasDrawRoute(context, route);
-    if (pair.forward.edges.length)
-    {
-      wasDrawRouteArrow(context, route, false, camera.scale);
-    }
-    if (pair.reverse.edges.length)
-    {
-      wasDrawRouteArrow(context, route, true, camera.scale);
-    }
-    visible.push({ pair: pair, route: route, selected: selected, muted: muted, color: color });
-  });
-  visible.forEach(function (entry)
-  {
-    if (camera.scale <= .28)
+    var focused = !focus || (focus.pairId ? pair.id === focus.pairId : pair.from === focus.anchor || pair.to === focus.anchor);
+    if (pair.contained && !(focus && focused))
     {
       return;
     }
-    var pair = entry.pair;
-    var route = entry.route;
-    var selected = entry.selected;
-    var muted = entry.muted;
-    var color = entry.color;
-    var label = route.badge.text;
-    context.font = "500 11px " + wasCanvasFontFamily;
-    var labelWidth = route.badge.width;
-    var labelHeight = route.badge.height;
-    var labelX = route.badge.x;
-    var labelY = route.badge.y;
-    context.globalAlpha = 1;
-    context.fillStyle = pair.conflicts.length ? wasGraphColors.conflictFill : wasGraphColors.labelBg;
-    context.strokeStyle = pair.conflicts.length ? wasGraphColors.conflict : selected ? color : wasGraphColors.labelStroke;
-    context.lineWidth = (selected || pair.conflicts.length ? 1 : .8) / Math.max(.45, camera.scale);
-    wasCanvasRoundRect(context, labelX - labelWidth / 2, labelY - labelHeight / 2, labelWidth, labelHeight, 6);
-    context.fill();
-    context.globalAlpha = selected ? 1 : muted ? .6 : .94;
-    context.stroke();
-    context.fillStyle = pair.conflicts.length ? wasGraphColors.conflictText : selected ? wasGraphColors.text : wasGraphColors.labelText;
-    context.textAlign = "center";
-    context.fillText(label, labelX, labelY + 4);
-    context.textAlign = "left";
-    wasState.graphLabelHits.push({ id: pair.id, left: labelX - labelWidth / 2, top: labelY - labelHeight / 2, right: labelX + labelWidth / 2, bottom: labelY + labelHeight / 2 });
+    var muted = wasState.model.activity.get(pair.from).category !== "recent" && wasState.model.activity.get(pair.to).category !== "recent";
+    // A messaging line has a color of its own, the one its beam travels in; any other line takes the color of its relation type.
+    var color = pair.conflicts.length ? wasGraphColors.conflict : muted ? wasGraphColors.edgeMuted : pair.deliveryCount ? wasLaserColor(pair.id) : (wasGraphColors[pair.type] || wasGraphColors.muted);
+    // level: 0 veiled, 1 normal, 2 hover focus, 3 selected
+    var level = !focus ? 1 : !focused ? 0 : focus.soft ? 2 : 3;
+    visible.push({ pair: pair, route: route, muted: muted, color: color, style: wasConnectionStyle(pair), level: level });
+  });
+  visible.sort(function (first, second) { return first.level - second.level; });
+  visible.forEach(function (entry)
+  {
+    wasStrokeConnection(context, entry, camera, now);
+  });
+  if (detail !== "block")
+  {
+    wasDrawFlows(context, visible, camera, now);
+  }
+  visible.forEach(function (entry)
+  {
+    if (detail === "full")
+    {
+      wasDrawConnectionLabel(context, entry, camera);
+    }
+    else if (detail === "name" && (entry.level >= 2 || entry.pair.conflicts.length))
+    {
+      wasDrawConnectionDot(context, entry, camera);
+    }
+  });
+  context.globalAlpha = 1;
+  return visible;
+}
+
+/* Ports sit where a line meets a card; an end that carries an arrowhead needs no port. */
+function wasDrawPorts(context, entries, camera)
+{
+  var unit = 1 / Math.max(.45, camera.scale);
+  entries.forEach(function (entry)
+  {
+    var points = entry.route.points;
+    var ends = [{ point: points[0], arrow: entry.pair.reverse.edges.length > 0 }, { point: points[points.length - 1], arrow: entry.pair.forward.edges.length > 0 }];
+    context.globalAlpha = [.3, entry.muted ? .5 : .95, 1, 1][entry.level];
+    context.fillStyle = wasGraphColors.canvasBg;
+    context.strokeStyle = entry.color;
+    context.lineWidth = 1.5 * unit;
+    ends.forEach(function (end)
+    {
+      if (end.arrow)
+      {
+        return;
+      }
+      context.beginPath();
+      context.arc(end.point.x, end.point.y, 3.2 * unit, 0, Math.PI * 2);
+      context.fill();
+      context.stroke();
+    });
   });
   context.globalAlpha = 1;
 }
@@ -3378,9 +3969,373 @@ function wasCardTagText(row, node, activity)
   return text;
 }
 
+/* Status glyphs differ in shape, not only in color: spinner, clock, check, alert, bar ring, dotted ring. */
+function wasDrawStatusIcon(context, status, x, y, radius, color, spin)
+{
+  var tau = Math.PI * 2;
+  context.lineWidth = 1.7;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.strokeStyle = color;
+  context.fillStyle = color;
+  if (status === "completed" || status === "interrupted")
+  {
+    context.globalAlpha = .2;
+    context.beginPath();
+    context.arc(x, y, radius, 0, tau);
+    context.fill();
+  }
+  context.globalAlpha = status === "running" ? .3 : 1;
+  context.beginPath();
+  context.arc(x, y, radius, 0, tau);
+  context.stroke();
+  context.globalAlpha = 1;
+  context.beginPath();
+  if (status === "running")
+  {
+    context.arc(x, y, radius, spin, spin + Math.PI * 1.15);
+  }
+  else if (status === "completed")
+  {
+    context.moveTo(x - radius * .42, y + radius * .02);
+    context.lineTo(x - radius * .1, y + radius * .36);
+    context.lineTo(x + radius * .46, y - radius * .3);
+  }
+  else if (status === "waiting")
+  {
+    context.moveTo(x, y - radius * .5);
+    context.lineTo(x, y);
+    context.lineTo(x + radius * .38, y + radius * .22);
+  }
+  else if (status === "interrupted")
+  {
+    context.moveTo(x, y - radius * .5);
+    context.lineTo(x, y + radius * .1);
+    context.moveTo(x, y + radius * .44);
+    context.lineTo(x, y + radius * .46);
+  }
+  else if (status === "idle")
+  {
+    context.moveTo(x - radius * .3, y);
+    context.lineTo(x + radius * .3, y);
+  }
+  else
+  {
+    // unknown: a ring with a dot
+    context.moveTo(x, y);
+    context.lineTo(x, y + .01);
+  }
+  context.stroke();
+}
+
+/* One gradient per card height, defined in card space so every card can reuse it. */
+function wasCardGradient(context, height)
+{
+  var key = height + wasGraphColors.nodeTop + wasGraphColors.node;
+  if (!wasState.cardGradients.has(key))
+  {
+    var gradient = null;
+    try
+    {
+      gradient = context.createLinearGradient(0, 0, 0, height);
+      gradient.addColorStop(0, wasGraphColors.nodeTop);
+      gradient.addColorStop(1, wasGraphColors.node);
+    }
+    catch (error)
+    {
+      gradient = null;
+    }
+    wasState.cardGradients.set(key, gradient);
+  }
+  return wasState.cardGradients.get(key);
+}
+
+function wasDrawCardShell(context, card, camera, detail, running, now)
+{
+  var point = card.point;
+  var unit = 1 / Math.max(.5, camera.scale);
+  if (card.selected)
+  {
+    context.globalAlpha = .22;
+    context.strokeStyle = wasGraphColors.accent;
+    context.lineWidth = 5 * unit;
+    wasCanvasRoundRect(context, point.x - 2, point.y - 2, point.width + 4, point.height + 4, 14);
+    context.stroke();
+  }
+  if (running)
+  {
+    context.strokeStyle = wasGraphColors.running;
+    context.globalAlpha = wasState.reducedMotion.matches ? .2 : .12 + .12 * (1 + Math.sin(now / 1100));
+    context.lineWidth = 2 * unit;
+    wasCanvasRoundRect(context, point.x - 4, point.y - 4, point.width + 8, point.height + 8, 16);
+    context.stroke();
+  }
+  context.globalAlpha = 1;
+  var plain = !card.selected && !card.past && !card.row.context;
+  var base = card.selected ? wasGraphColors.nodeSelected : card.past ? wasGraphColors.nodePast : card.row.context ? wasGraphColors.nodeContext : wasGraphColors.node;
+  var gradient = plain && detail !== "block" ? wasCardGradient(context, point.height) : null;
+  if (gradient)
+  {
+    context.save();
+    context.translate(point.x, point.y);
+    context.fillStyle = gradient;
+    wasCanvasRoundRect(context, 0, 0, point.width, point.height, 12);
+    context.fill();
+    context.restore();
+  }
+  else
+  {
+    context.fillStyle = base;
+    wasCanvasRoundRect(context, point.x, point.y, point.width, point.height, 12);
+    context.fill();
+  }
+  if (detail === "block")
+  {
+    context.globalAlpha = card.past ? .1 : .28;
+    context.fillStyle = card.statusColor;
+    context.fill();
+    context.globalAlpha = 1;
+  }
+  context.strokeStyle = card.selected ? wasGraphColors.accent : card.conflict ? wasGraphColors.conflict : card.hovered ? wasGraphColors.nodeHover : wasGraphColors.nodeStroke;
+  context.lineWidth = (card.selected ? 1.6 : card.hovered ? 1.3 : 1) * unit;
+  context.stroke();
+  if (card.manager)
+  {
+    context.fillStyle = wasGraphColors.management;
+    wasCanvasRoundRect(context, point.x + 16, point.y - 1.25, 36, 2.5, 1.25);
+    context.fill();
+  }
+  context.fillStyle = card.past ? wasGraphColors.edgeMuted : wasCanvasProviderColor(card.node.provider);
+  wasCanvasRoundRect(context, point.x - 1.5, point.y + 18, 3, point.height - 36, 1.5);
+  context.fill();
+}
+
+/* The share of the messages a session sent that are already resolved; the unresolved share shows in the waiting color. */
+function wasDrawCardQueue(context, card, y)
+{
+  var point = card.point;
+  var queue = wasState.messageSummary.nodes.get(card.row.id) || { sent: 0, received: 0, unresolved: 0 };
+  wasCanvasSegments(context, [
+    { text: wasT("app.card.queueCounts", { sent: queue.sent, received: queue.received }) + "  · ", color: wasGraphColors.muted },
+    { text: wasT("app.card.queueUnresolved", { unresolved: queue.unresolved }), color: queue.unresolved ? wasGraphColors.waiting : wasGraphColors.muted }
+  ], point.x + 14, y, point.width - 28);
+  var total = queue.sent;
+  var width = point.width - 28;
+  var waiting = Math.min(total, queue.unresolved);
+  context.fillStyle = wasGraphColors.nodeStroke;
+  context.globalAlpha = .7;
+  wasCanvasRoundRect(context, point.x + 14, y + 8, width, 3.5, 1.75);
+  context.fill();
+  context.globalAlpha = 1;
+  if (total)
+  {
+    context.fillStyle = wasGraphColors.teal;
+    wasCanvasRoundRect(context, point.x + 14, y + 8, Math.max(3.5, width * (total - waiting) / total), 3.5, 1.75);
+    context.fill();
+    if (waiting)
+    {
+      context.fillStyle = wasGraphColors.waiting;
+      wasCanvasRoundRect(context, point.x + 14 + width * (total - waiting) / total, y + 8, Math.max(3.5, width * waiting / total), 3.5, 1.75);
+      context.fill();
+    }
+  }
+}
+
+function wasDrawCardText(context, card, camera, operating, running, now)
+{
+  var point = card.point;
+  var node = card.node;
+  var row = card.row;
+  var detail = wasRamp(camera.scale, .5, .7);
+  var size = Math.min(24, Math.max(13.5, 10.8 / camera.scale));
+  var spin = running && !wasState.reducedMotion.matches ? now / 900 % 1 * Math.PI * 2 - Math.PI / 2 : -Math.PI / 2;
+  wasDrawStatusIcon(context, node.status, point.x + point.width - 20, point.y + 20, 8, card.statusColor, spin);
+  if (detail > .02)
+  {
+    context.globalAlpha = detail;
+    context.font = "600 11px " + wasCanvasFontFamily;
+    wasCanvasSegments(context, [
+      { text: node.provider.toUpperCase(), color: card.past ? wasGraphColors.muted : wasCanvasProviderColor(node.provider) },
+      { text: wasCardTagText(row, node, card.activity), color: wasGraphColors.muted },
+      { text: card.conflict ? " · " + wasT("app.card.conflict") : "", color: wasGraphColors.conflictText }
+    ], point.x + 14, point.y + 20, point.width - 52);
+    context.font = "11px " + wasCanvasFontFamily;
+    var hiddenActivity = wasState.view.hiddenActivityDescendants.get(row.id) || 0;
+    var activityText = hiddenActivity ? wasT("app.card.hiddenByScope", { count: hiddenActivity }) : node.description || node.statusEvidence || wasRelativeTime(node.lastSeen);
+    wasCanvasSegments(context, [
+      { text: wasStatusName(node.status), color: card.past ? wasGraphColors.muted : wasGraphColors[node.status] || wasGraphColors.text2 },
+      { text: " · " + wasText(activityText), color: wasGraphColors.muted }
+    ], point.x + 14, point.y + 61, wasState.model.descendants.get(row.id) ? 156 : 198);
+    if (wasState.model.descendants.get(row.id))
+    {
+      context.fillStyle = wasGraphColors.text2;
+      context.textAlign = "right";
+      context.fillText((row.expanded ? "▾ " : "▸ ") + wasFormatNumber(wasState.model.descendants.get(row.id)), point.x + point.width - 13, point.y + 61);
+      context.textAlign = "left";
+    }
+    if (operating)
+    {
+      wasDrawCardQueue(context, card, point.y + 81);
+    }
+    context.globalAlpha = 1;
+  }
+  // The name grows as the card shrinks and settles in the middle once the detail rows have faded.
+  context.font = "600 " + size + "px " + wasCanvasFontFamily;
+  context.fillStyle = row.context ? wasGraphColors.text2 : wasGraphColors.text;
+  context.fillText(wasCanvasText(context, node.name, point.width - 28), point.x + 14, point.y + 41 + (1 - detail) * (point.height / 2 + size * .35 - 41));
+}
+
+/* A far-away team head keeps a readable name on its block. */
+function wasDrawBlockTitle(context, card, camera)
+{
+  var point = card.point;
+  var size = Math.min(56, 11 / camera.scale);
+  context.font = "700 " + size + "px " + wasCanvasFontFamily;
+  context.fillStyle = wasGraphColors.text;
+  context.textAlign = "center";
+  context.fillText(wasCanvasText(context, card.node.name, point.width - 16), point.x + point.width / 2, point.y + point.height / 2 + size * .35);
+  context.textAlign = "left";
+}
+
+function wasDrawCard(context, card, camera, detail, operating, now)
+{
+  var running = card.node.status === "running" && card.activity.category === "recent" && !card.node.archived;
+  card.statusColor = card.past ? wasGraphColors.edgeMuted : wasGraphColors[card.node.status] || wasGraphColors.unknown;
+  wasDrawCardShell(context, card, camera, detail, running && !card.veil, now);
+  if (detail !== "block")
+  {
+    wasDrawCardText(context, card, camera, operating, running, now);
+  }
+  else if (card.manager)
+  {
+    wasDrawBlockTitle(context, card, camera);
+  }
+  if (card.veil)
+  {
+    context.globalAlpha = card.veil;
+    context.fillStyle = wasGraphColors.canvasBg;
+    wasCanvasRoundRect(context, card.point.x, card.point.y, card.point.width, card.point.height, 12);
+    context.fill();
+    context.globalAlpha = 1;
+  }
+  return running;
+}
+
+/* The dots belong to the world: they follow the pan and the zoom, and thin out by halves before they crowd. */
+function wasDrawGraphGrid(context, camera, width, height)
+{
+  var scale = Math.max(1e-6, camera.scale);
+  var step = 28;
+  while (step * scale < 24)
+  {
+    step *= 2;
+  }
+  while (step * scale > 48)
+  {
+    step /= 2;
+  }
+  var spacing = step * scale;
+  var gridX = ((camera.x % spacing) + spacing) % spacing;
+  var gridY = ((camera.y % spacing) + spacing) % spacing;
+  var size = spacing > 30 ? 1.6 : 1.2;
+  context.fillStyle = wasGraphColors.canvasGrid;
+  for (var x = gridX; x < width; x += spacing)
+  {
+    for (var y = gridY; y < height; y += spacing)
+    {
+      context.fillRect(x, y, size, size);
+    }
+  }
+}
+
+/* The overview appears only while part of the graph lies outside the view. Coordinates are canvas pixels. */
+function wasMinimapLayout(bounds, camera, canvasWidth, canvasHeight, count)
+{
+  if (!bounds || count < 8 || canvasWidth < 700 || canvasHeight < 300)
+  {
+    return null;
+  }
+  var inside = camera.x >= -2 && camera.y >= -2 && camera.x + bounds.width * camera.scale <= canvasWidth + 2 && camera.y + bounds.height * camera.scale <= canvasHeight + 2;
+  if (inside)
+  {
+    return null;
+  }
+  var scale = Math.min(220 / bounds.width, 130 / bounds.height);
+  var width = Math.max(56, bounds.width * scale);
+  var height = Math.max(36, bounds.height * scale);
+  return { x: canvasWidth - width - 12, y: canvasHeight - height - 60, width: width, height: height, scale: scale };
+}
+
+function wasMinimapContains(x, y)
+{
+  var layout = wasState.minimap;
+  return !!layout && x >= layout.x - 4 && x <= layout.x + layout.width + 4 && y >= layout.y - 4 && y <= layout.y + layout.height + 4;
+}
+
+/* Centers the view on the world point under a minimap pixel. */
+function wasPanToMinimap(clientX, clientY)
+{
+  var layout = wasState.minimap;
+  if (!layout)
+  {
+    return;
+  }
+  var rect = wasElements.canvas.getBoundingClientRect();
+  var x = (clientX - rect.left - layout.x) / layout.scale;
+  var y = (clientY - rect.top - layout.y) / layout.scale;
+  wasState.camera.x = wasState.canvasWidth / 2 - x * wasState.camera.scale;
+  wasState.camera.y = wasState.canvasHeight / 2 - y * wasState.camera.scale;
+  wasRequestGraphDraw();
+}
+
+function wasDrawMinimap(context, camera, width, height)
+{
+  var layout = wasMinimapLayout(wasState.graphBounds, camera, width, height, wasState.graphPositions.size);
+  wasState.minimap = layout;
+  if (!layout)
+  {
+    return;
+  }
+  context.globalAlpha = .94;
+  context.fillStyle = wasGraphColors.minimapBg;
+  context.strokeStyle = wasGraphColors.nodeStroke;
+  context.lineWidth = 1;
+  wasCanvasRoundRect(context, layout.x, layout.y, layout.width, layout.height, 8);
+  context.fill();
+  context.stroke();
+  context.globalAlpha = 1;
+  context.save();
+  wasCanvasRoundRect(context, layout.x, layout.y, layout.width, layout.height, 8);
+  context.clip();
+  context.fillStyle = wasGraphColors.laneStroke;
+  context.globalAlpha = .5;
+  wasState.graphLanes.forEach(function (lane)
+  {
+    context.fillRect(layout.x + lane.x * layout.scale, layout.y + lane.y * layout.scale, lane.width * layout.scale, lane.height * layout.scale);
+  });
+  context.globalAlpha = 1;
+  wasState.graphPositions.forEach(function (point, id)
+  {
+    var node = wasState.model.nodeMap.get(id);
+    var past = wasState.model.activity.get(id).category !== "recent";
+    context.fillStyle = id === wasState.selectedId ? wasGraphColors.accent : past ? wasGraphColors.edgeMuted : wasGraphColors[node.status] || wasGraphColors.unknown;
+    context.fillRect(layout.x + point.x * layout.scale, layout.y + point.y * layout.scale, Math.max(2, point.width * layout.scale), Math.max(1.6, point.height * layout.scale));
+  });
+  var left = layout.x - camera.x / camera.scale * layout.scale;
+  var top = layout.y - camera.y / camera.scale * layout.scale;
+  context.fillStyle = wasGraphColors.accent;
+  context.globalAlpha = .1;
+  context.fillRect(left, top, width / camera.scale * layout.scale, height / camera.scale * layout.scale);
+  context.globalAlpha = 1;
+  context.strokeStyle = wasGraphColors.accent;
+  context.lineWidth = 1.2;
+  context.strokeRect(left, top, width / camera.scale * layout.scale, height / camera.scale * layout.scale);
+  context.restore();
+}
+
 function wasDrawGraph()
 {
-  if (!wasState.view || !wasState.canvasWidth || !wasState.canvasHeight)
+  if (!wasState.view || wasState.viewMode !== "graph" || !wasState.canvasWidth || !wasState.canvasHeight)
   {
     return;
   }
@@ -3393,31 +4348,27 @@ function wasDrawGraph()
   var camera = wasState.camera;
   var width = wasState.canvasWidth;
   var height = wasState.canvasHeight;
+  var now = Date.now();
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   context.fillStyle = wasGraphColors.canvasBg;
   context.fillRect(0, 0, width, height);
   if (wasElements.showGrid.checked)
   {
-    var grid = 28;
-    var gridX = ((camera.x % grid) + grid) % grid;
-    var gridY = ((camera.y % grid) + grid) % grid;
-    context.fillStyle = wasGraphColors.canvasGrid;
-    for (var x = gridX; x < width; x += grid)
-    {
-      for (var y = gridY; y < height; y += grid)
-      {
-        context.fillRect(x, y, 1, 1);
-      }
-    }
+    wasDrawGraphGrid(context, camera, width, height);
   }
   context.translate(camera.x, camera.y);
   context.scale(camera.scale, camera.scale);
   var viewport = { left: -camera.x / camera.scale, top: -camera.y / camera.scale, right: (width - camera.x) / camera.scale, bottom: (height - camera.y) / camera.scale };
-  wasDrawConnections(context, viewport, camera);
+  var focus = wasGraphFocus();
+  var detail = wasGraphDetail(camera.scale);
+  wasDrawLanes(context, viewport, camera, focus, detail);
+  var connections = wasDrawConnections(context, viewport, camera, focus, now, detail);
+  // How often the graph must redraw to stay alive: beams need a smooth frame rate, a spinning ring only a slow one.
+  var live = detail !== "block" && connections.some(function (entry) { return entry.style.flowing && !entry.muted; }) ? 50 : 0;
   var operating = wasElements.graphLayout.value === "operating";
-  var startRow = operating ? 0 : Math.max(0, Math.floor((viewport.top - 115) / 108));
-  var endRow = operating ? wasState.graphRows.length : Math.min(wasState.graphRows.length, Math.ceil((viewport.bottom + 77) / 108));
+  var startRow = operating ? 0 : Math.max(0, Math.floor((viewport.top - 115) / wasNativeStep.y));
+  var endRow = operating ? wasState.graphRows.length : Math.min(wasState.graphRows.length, Math.ceil((viewport.bottom + 77) / wasNativeStep.y));
   for (var index = startRow; index < endRow; index += 1)
   {
     var row = wasState.graphRows[index];
@@ -3428,86 +4379,44 @@ function wasDrawGraph()
     }
     var node = wasState.model.nodeMap.get(row.id);
     var activity = wasState.model.activity.get(row.id);
-    var isSelected = row.id === wasState.selectedId;
-    var hasConflict = node.conflicts.length || wasState.model.nodeIssues.get(row.id).length;
-    var pastContext = row.context && activity.category !== "recent";
-    if (isSelected)
+    var card =
     {
-      context.globalAlpha = .22;
-      context.strokeStyle = wasGraphColors.accent;
-      context.lineWidth = 5 / Math.max(.5, camera.scale);
-      wasCanvasRoundRect(context, point.x - 2, point.y - 2, point.width + 4, point.height + 4, 11);
-      context.stroke();
-      context.globalAlpha = 1;
-    }
-    context.fillStyle = isSelected ? wasGraphColors.nodeSelected : pastContext ? wasGraphColors.nodePast : row.context ? wasGraphColors.nodeContext : wasGraphColors.node;
-    context.strokeStyle = isSelected ? wasGraphColors.accent : hasConflict ? wasGraphColors.conflict : wasGraphColors.nodeStroke;
-    context.lineWidth = (isSelected ? 1.6 : 1) / Math.max(.5, camera.scale);
-    wasCanvasRoundRect(context, point.x, point.y, point.width, point.height, 9);
-    context.fill();
-    context.stroke();
-    if (operating && row.manager)
+      row: row,
+      point: point,
+      node: node,
+      activity: activity,
+      selected: row.id === wasState.selectedId,
+      hovered: row.id === wasState.hoverId,
+      conflict: !!(node.conflicts.length || wasState.model.nodeIssues.get(row.id).length),
+      past: !!row.context && activity.category !== "recent",
+      manager: operating && !!row.manager,
+      veil: focus && !focus.ids.has(row.id) ? (focus.soft ? .38 : .64) : 0
+    };
+    if (wasDrawCard(context, card, camera, detail, operating, now) && !card.veil)
     {
-      context.fillStyle = wasGraphColors.management;
-      wasCanvasRoundRect(context, point.x + 14, point.y - 1.25, 36, 2.5, 1.25);
-      context.fill();
-    }
-    context.fillStyle = pastContext ? wasGraphColors.edgeMuted : wasGraphColors[node.status] || wasGraphColors.unknown;
-    wasCanvasRoundRect(context, point.x - 1.5, point.y + 16, 3, point.height - 32, 1.5);
-    context.fill();
-    if (camera.scale < .22)
-    {
-      continue;
-    }
-    context.font = "600 11px " + wasCanvasFontFamily;
-    wasCanvasSegments(context, [
-      { text: node.provider.toUpperCase(), color: pastContext ? wasGraphColors.muted : wasCanvasProviderColor(node.provider) },
-      { text: wasCardTagText(row, node, activity), color: wasGraphColors.muted },
-      { text: hasConflict ? " · " + wasT("app.card.conflict") : "", color: wasGraphColors.conflictText }
-    ], point.x + 14, point.y + 20, point.width - 26);
-    context.font = "600 13px " + wasCanvasFontFamily;
-    context.fillStyle = row.context ? wasGraphColors.text2 : wasGraphColors.text;
-    context.fillText(wasCanvasText(context, node.name, point.width - 26), point.x + 14, point.y + 40);
-    context.font = "11px " + wasCanvasFontFamily;
-    var hiddenActivity = wasState.view.hiddenActivityDescendants.get(row.id) || 0;
-    var activityText = hiddenActivity ? wasT("app.card.hiddenByScope", { count: hiddenActivity }) : node.description || node.statusEvidence || wasRelativeTime(node.lastSeen);
-    wasCanvasSegments(context, [
-      { text: wasStatusName(node.status), color: pastContext ? wasGraphColors.muted : wasGraphColors[node.status] || wasGraphColors.text2 },
-      { text: " · " + wasText(activityText), color: wasGraphColors.muted }
-    ], point.x + 14, point.y + 60, wasState.model.descendants.get(row.id) ? 156 : 198);
-    if (wasState.model.descendants.get(row.id))
-    {
-      var suffix = (row.expanded ? "▾ " : "▸ ") + wasFormatNumber(wasState.model.descendants.get(row.id));
-      context.fillStyle = wasGraphColors.text2;
-      context.textAlign = "right";
-      context.fillText(suffix, point.x + point.width - 13, point.y + 60);
-      context.textAlign = "left";
-    }
-    if (operating)
-    {
-      var queue = wasState.messageSummary.nodes.get(row.id) || { sent: 0, received: 0, unresolved: 0 };
-      wasCanvasSegments(context, [
-        { text: wasT("app.card.queueCounts", { sent: queue.sent, received: queue.received }) + "  · ", color: wasGraphColors.muted },
-        { text: wasT("app.card.queueUnresolved", { unresolved: queue.unresolved }), color: queue.unresolved ? wasGraphColors.waiting : wasGraphColors.muted }
-      ], point.x + 14, point.y + 84, point.width - 26);
-      if (node.status === "running" && activity.category === "recent" && !node.archived)
-      {
-        context.strokeStyle = wasGraphColors.running;
-        context.globalAlpha = wasState.reducedMotion.matches ? .2 : .12 + .12 * (1 + Math.sin(Date.now() / 1100));
-        context.lineWidth = 2 / Math.max(.5, camera.scale);
-        wasCanvasRoundRect(context, point.x - 4, point.y - 4, point.width + 8, point.height + 8, 12);
-        context.stroke();
-        context.globalAlpha = 1;
-      }
+      live = live || 100;
     }
   }
+  if (detail !== "block")
+  {
+    wasDrawPorts(context, connections, camera);
+  }
   wasDrawObservationPulses(context);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  wasDrawMinimap(context, camera, width, height);
   wasElements.zoomLabel.textContent = Math.round(camera.scale * 1000) / 10 + "%";
+  wasState.graphLive = live;
   wasScheduleGraphAnimation();
 }
 
 function wasFitGraph()
 {
+  if (wasState.viewMode !== "graph")
+  {
+    // The layout of a hidden graph is out of date; it is fitted when the graph is shown.
+    wasState.graphInitialized = false;
+    return;
+  }
   if (!wasState.graphBounds || !wasState.graphPositions.size)
   {
     return;
@@ -3523,6 +4432,11 @@ function wasFitGraph()
 
 function wasCenterNode(id)
 {
+  if (wasState.viewMode !== "graph" || !wasState.graphPositions)
+  {
+    wasState.pendingCenterId = id;
+    return;
+  }
   var point = wasState.graphPositions.get(id);
   if (!point)
   {
@@ -3560,7 +4474,7 @@ function wasHitGraph(clientX, clientY)
     });
     return found;
   }
-  var index = Math.floor((y - 38) / 108);
+  var index = Math.floor((y - 38) / wasNativeStep.y);
   if (index < 0 || index >= wasState.view.rows.length)
   {
     return null;
@@ -3570,10 +4484,61 @@ function wasHitGraph(clientX, clientY)
   return x >= point.x && x <= point.x + point.width && y >= point.y && y <= point.y + point.height ? row.id : null;
 }
 
+/* A pointer the browser no longer tracks makes setPointerCapture throw; dragging then simply goes without it. */
+function wasCapturePointer(event)
+{
+  try
+  {
+    wasElements.canvas.setPointerCapture(event.pointerId);
+  }
+  catch (error)
+  {
+    return;
+  }
+}
+
+/* The connection whose label or dot lies under the pointer; the last one drawn wins. */
+function wasHitLabel(clientX, clientY)
+{
+  var rect = wasElements.canvas.getBoundingClientRect();
+  var x = (clientX - rect.left - wasState.camera.x) / wasState.camera.scale;
+  var y = (clientY - rect.top - wasState.camera.y) / wasState.camera.scale;
+  var hit = wasState.graphLabelHits.slice().reverse().find(function (label)
+  {
+    return x >= label.left && x <= label.right && y >= label.top && y <= label.bottom;
+  });
+  return hit ? hit.id : "";
+}
+
+function wasUpdateHover(clientX, clientY)
+{
+  if (!wasState.view)
+  {
+    return;
+  }
+  var rect = wasElements.canvas.getBoundingClientRect();
+  var overMap = wasMinimapContains(clientX - rect.left, clientY - rect.top);
+  var id = overMap ? null : wasHitGraph(clientX, clientY);
+  var pairId = overMap || id ? "" : wasHitLabel(clientX, clientY);
+  wasElements.canvas.classList.toggle("was-hovering", !!(id || pairId || overMap));
+  if (id !== wasState.hoverId || pairId !== wasState.hoverPairId)
+  {
+    wasState.hoverId = id;
+    wasState.hoverPairId = pairId;
+    wasRequestGraphDraw();
+  }
+}
+
 function wasSetView(mode)
 {
   if (mode !== wasState.viewMode && wasState.replayStatus) wasStopReplay();
-  if (mode !== wasState.viewMode) wasState.selectedPairId = null;
+  if (mode !== wasState.viewMode)
+  {
+    wasState.selectedPairId = null;
+    wasState.hoverId = null;
+    wasState.hoverPairId = "";
+    wasState.minimapDrag = false;
+  }
   clearTimeout(wasState.animationTimer);
   if (mode === "office" && wasState.viewMode !== "office") wasState.officeAutoReplay = true;
   wasState.viewMode = mode;
@@ -3594,11 +4559,25 @@ function wasSetView(mode)
   }
   if (mode === "graph")
   {
+    if (wasState.graphStale && wasState.model && wasState.view)
+    {
+      wasBuildGraph();
+    }
     wasResizeGraph();
     if (!wasState.graphInitialized && wasState.model)
     {
       wasFitGraph();
       wasState.graphInitialized = true;
+    }
+    if (wasState.pendingCenterId)
+    {
+      // A selection made while the graph was hidden asked to be centered; only the current one still matters.
+      var pending = wasState.pendingCenterId;
+      wasState.pendingCenterId = "";
+      if (pending === wasState.selectedId)
+      {
+        wasCenterNode(pending);
+      }
     }
     wasRequestGraphDraw();
   }
@@ -4226,6 +5205,7 @@ function wasBindEvents()
     event.preventDefault();
     var rect = wasElements.canvas.getBoundingClientRect();
     wasZoomGraph(Math.exp(-event.deltaY * .0014), event.clientX - rect.left, event.clientY - rect.top);
+    wasUpdateHover(event.clientX, event.clientY);
   }, { passive: false });
   wasElements.canvas.addEventListener("pointerdown", function (event)
   {
@@ -4233,14 +5213,32 @@ function wasBindEvents()
     {
       return;
     }
+    var rect = wasElements.canvas.getBoundingClientRect();
+    if (wasMinimapContains(event.clientX - rect.left, event.clientY - rect.top))
+    {
+      wasCapturePointer(event);
+      wasState.minimapDrag = true;
+      wasPanToMinimap(event.clientX, event.clientY);
+      return;
+    }
+    wasCapturePointer(event);
     wasState.drag = { x: event.clientX, y: event.clientY, originX: wasState.camera.x, originY: wasState.camera.y, moved: false, pointerId: event.pointerId };
-    wasElements.canvas.setPointerCapture(event.pointerId);
     wasElements.canvas.classList.add("was-dragging");
   });
   wasElements.canvas.addEventListener("pointermove", function (event)
   {
+    if (wasState.minimapDrag && !(event.buttons & 1))
+    {
+      wasState.minimapDrag = false;
+    }
+    if (wasState.minimapDrag)
+    {
+      wasPanToMinimap(event.clientX, event.clientY);
+      return;
+    }
     if (!wasState.drag)
     {
+      wasUpdateHover(event.clientX, event.clientY);
       return;
     }
     var dx = event.clientX - wasState.drag.x;
@@ -4258,6 +5256,11 @@ function wasBindEvents()
   });
   wasElements.canvas.addEventListener("pointerup", function (event)
   {
+    if (wasState.minimapDrag)
+    {
+      wasState.minimapDrag = false;
+      return;
+    }
     if (!wasState.drag)
     {
       return;
@@ -4265,6 +5268,10 @@ function wasBindEvents()
     var moved = wasState.drag.moved;
     wasState.drag = null;
     wasElements.canvas.classList.remove("was-dragging");
+    if (moved)
+    {
+      wasUpdateHover(event.clientX, event.clientY);
+    }
     if (!moved && wasState.view)
     {
       var id = wasHitGraph(event.clientX, event.clientY);
@@ -4274,16 +5281,15 @@ function wasBindEvents()
       }
       else
       {
-        var rect = wasElements.canvas.getBoundingClientRect();
-        var x = (event.clientX - rect.left - wasState.camera.x) / wasState.camera.scale;
-        var y = (event.clientY - rect.top - wasState.camera.y) / wasState.camera.scale;
-        var hit = wasState.graphLabelHits.slice().reverse().find(function (label)
+        var pairId = wasHitLabel(event.clientX, event.clientY);
+        if (pairId)
         {
-          return x >= label.left && x <= label.right && y >= label.top && y <= label.bottom;
-        });
-        if (hit)
+          wasSelectConnection(pairId);
+        }
+        else if (wasState.selectedId || wasState.selectedPairId)
         {
-          wasSelectConnection(hit.id);
+          // A click on empty canvas lets go of the selection.
+          wasCloseDetail();
         }
       }
     }
@@ -4291,10 +5297,26 @@ function wasBindEvents()
   wasElements.canvas.addEventListener("pointercancel", function ()
   {
     wasState.drag = null;
+    wasState.minimapDrag = false;
     wasElements.canvas.classList.remove("was-dragging");
+  });
+  wasElements.canvas.addEventListener("pointerleave", function ()
+  {
+    wasElements.canvas.classList.remove("was-hovering");
+    if (wasState.hoverId || wasState.hoverPairId)
+    {
+      wasState.hoverId = null;
+      wasState.hoverPairId = "";
+      wasRequestGraphDraw();
+    }
   });
   wasElements.canvas.addEventListener("dblclick", function (event)
   {
+    var rect = wasElements.canvas.getBoundingClientRect();
+    if (wasMinimapContains(event.clientX - rect.left, event.clientY - rect.top))
+    {
+      return;
+    }
     var id = wasHitGraph(event.clientX, event.clientY);
     if (id)
     {
@@ -4325,6 +5347,11 @@ function wasBindEvents()
     else if (event.key === "0")
     {
       wasFitGraph();
+    }
+    else if (event.key === "Escape" && (wasState.selectedId || wasState.selectedPairId))
+    {
+      event.stopPropagation();
+      wasCloseDetail();
     }
     else if (event.key === "ArrowLeft")
     {
@@ -4571,6 +5598,16 @@ function wasInitialize()
     graphObstacles: new Map(),
     graphDeliveries: new Map(),
     graphLabelHits: [],
+    graphLive: 0,
+    laserColors: new Map(),
+    graphStale: true,
+    pendingCenterId: "",
+    graphLanes: [],
+    cardGradients: new Map(),
+    hoverId: null,
+    hoverPairId: "",
+    minimap: null,
+    minimapDrag: false,
     graphBounds: null,
     camera: { x: 0, y: 0, scale: 1 },
     canvasWidth: 0,
@@ -4643,7 +5680,7 @@ function wasInitialize()
 
 if (typeof module !== "undefined" && module.exports)
 {
-  module.exports = { wasBuildModel: wasBuildModel, wasBuildView: wasBuildView, wasParseSort: wasParseSort, wasGetBranch: wasGetBranch, wasNormalizeSnapshot: wasNormalizeSnapshot, wasGetActivity: wasGetActivity, wasGetEdgeHistory: wasGetEdgeHistory, wasBuildOperatingView: wasBuildOperatingView, wasObserveMessages: wasObserveMessages, wasSummarizeMessages: wasSummarizeMessages, wasMessageResolved: wasMessageResolved, wasBundleConnections: wasBundleConnections, wasRouteConnection: wasRouteConnection, wasPointOnRoute: wasPointOnRoute, wasConnectionLabel: wasConnectionLabel, wasConnectionDirectionLabel: wasConnectionDirectionLabel };
+  module.exports = { wasBuildModel: wasBuildModel, wasBuildView: wasBuildView, wasParseSort: wasParseSort, wasGetBranch: wasGetBranch, wasNormalizeSnapshot: wasNormalizeSnapshot, wasGetActivity: wasGetActivity, wasGetEdgeHistory: wasGetEdgeHistory, wasBuildOperatingView: wasBuildOperatingView, wasObserveMessages: wasObserveMessages, wasSummarizeMessages: wasSummarizeMessages, wasMessageResolved: wasMessageResolved, wasBundleConnections: wasBundleConnections, wasRouteConnection: wasRouteConnection, wasPointOnRoute: wasPointOnRoute, wasConnectionLabel: wasConnectionLabel, wasConnectionDirectionLabel: wasConnectionDirectionLabel, wasGraphDetail: wasGraphDetail, wasRamp: wasRamp, wasConnectionStyle: wasConnectionStyle, wasGraphNeighbors: wasGraphNeighbors, wasRouteAnchor: wasRouteAnchor, wasMinimapLayout: wasMinimapLayout, wasBuildTeamLayout: wasBuildTeamLayout, wasIsContainedPair: wasIsContainedPair, wasGridColumns: wasGridColumns, wasRouteCurve: wasRouteCurve, wasCurveSlice: wasCurveSlice, wasLaserHead: wasLaserHead, wasRouteSeed: wasRouteSeed };
 }
 
 if (typeof document !== "undefined")

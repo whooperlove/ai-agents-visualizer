@@ -63,6 +63,19 @@
   --was-canvas-bg: #0f1216;
   --was-canvas-grid: #242a33;
   --was-node: #1b2027;
+  --was-node-top: #252c36;
+  --was-node-hover: #46505e;
+  --was-minimap-bg: #12161b;
+  --was-lane: #141920;
+  --was-laser-1: #22d3ee;
+  --was-laser-2: #a3e635;
+  --was-laser-3: #f472b6;
+  --was-laser-4: #fbbf24;
+  --was-laser-5: #818cf8;
+  --was-laser-6: #fb7185;
+  --was-laser-7: #34d399;
+  --was-laser-8: #fb923c;
+  --was-lane-stroke: #2a313b;
   --was-node-context: #171b21;
   --was-node-past: #131619;
   --was-node-selected: #2a2119;
@@ -1344,6 +1357,7 @@ h1
   background: var(--was-canvas-bg);
 }
 #was-graph { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+#was-graph.was-hovering { cursor: pointer; }
 #was-graph.was-dragging { cursor: grabbing; }
 #was-graph:focus-visible { outline-offset: -3px; }
 .was-scene-status,
@@ -1393,7 +1407,7 @@ h1
 .was-legend-item::before { content: ""; width: 14px; height: 2px; border-radius: 2px; background: var(--was-swatch, var(--was-muted)); }
 .was-legend-management { --was-swatch: var(--was-management); }
 .was-legend-spawn { --was-swatch: var(--was-spawn); }
-.was-legend-message { --was-swatch: var(--was-collaboration); }
+.was-legend-message { --was-swatch: linear-gradient(90deg, var(--was-laser-1), var(--was-laser-3), var(--was-laser-4), var(--was-laser-5)); }
 .was-legend-dependency { --was-swatch: var(--was-dependency); }
 .was-legend-handoff { --was-swatch: var(--was-handoff); }
 .was-legend-conflict { --was-swatch: var(--was-conflict); color: var(--was-conflict-text); }

@@ -700,6 +700,401 @@ test("direction counts and replay coordinates follow the same leftward or upward
   assert.ok(frontend.wasPointOnRoute(route, .25).y > frontend.wasPointOnRoute(route, .75).y);
 });
 
+function teamRows(spec)
+{
+  // spec: { id: [children...] } in pre-order; the first key is the only root unless a key is listed in roots.
+  var ids = Object.keys(spec);
+  var parent = new Map();
+  ids.forEach(function (id) { spec[id].forEach(function (child) { parent.set(child, id); }); });
+  var depth = function (id) { return parent.has(id) ? depth(parent.get(id)) + 1 : 0; };
+  return ids.map(function (id) { return { id: id, depth: depth(id), children: spec[id] }; });
+}
+
+test("the team layout puts a manager's members in a lane beside the manager's own lane chain", function ()
+{
+  var rows = teamRows({
+    master: ["lead", "a", "b", "c", "d", "e"], lead: ["w1", "w2"], w1: [], w2: [], a: [], b: [], c: [], d: [], e: [],
+    loner1: [], loner2: [], loner3: []
+  });
+  var layout = frontend.wasBuildTeamLayout(rows);
+  assert.equal(layout.positions.size, rows.length, "every row gets a card");
+  var at = function (id) { return layout.positions.get(id); };
+  var overlaps = function (first, second) { return first.x < second.x + second.width && second.x < first.x + first.width && first.y < second.y + second.height && second.y < first.y + first.height; };
+  var cards = Array.from(layout.positions.values());
+  cards.forEach(function (first, index)
+  {
+    cards.slice(index + 1).forEach(function (second) { assert.equal(overlaps(first, second), false, first.row.id + " overlaps " + second.row.id); });
+  });
+  var masterLane = layout.lanes.find(function (lane) { return lane.id === "master"; });
+  var leadLane = layout.lanes.find(function (lane) { return lane.id === "lead"; });
+  assert.equal(masterLane.count, 6);
+  ["a", "b", "c", "d", "e"].forEach(function (id)
+  {
+    var card = at(id);
+    assert.equal(card.leafOf, "master");
+    assert.ok(card.x >= masterLane.x && card.x + card.width <= masterLane.x + masterLane.width && card.y >= masterLane.y && card.y + card.height <= masterLane.y + masterLane.height, id + " sits inside the lane of its manager");
+    assert.ok(card.y > at("master").y + at("master").height, "members sit below a head that has lanes to its right");
+  });
+  assert.ok(leadLane.x >= masterLane.x + masterLane.width + 40, "the lane of a member that manages others lies to the right");
+  assert.equal(at("master").trunkX > masterLane.x + masterLane.width && at("master").trunkX < leadLane.x, true, "the shared trunk runs in the corridor between the two lanes");
+  assert.equal(at("lead").trunkX, undefined, "a head without lanes to its right has no trunk");
+  assert.ok(at("w1").x >= leadLane.x && at("w1").y > leadLane.y, "plain members of the lead stay in its lane");
+  var solo = layout.lanes.find(function (lane) { return lane.solo; });
+  assert.equal(solo.count, 3, "sessions without a team share one panel");
+  assert.ok(solo.y > masterLane.y + masterLane.height, "the panel of sessions without a team lies below the teams");
+  ["loner1", "loner2", "loner3"].forEach(function (id) { assert.equal(at(id).leafOf, undefined); });
+});
+
+test("cards keep twice the former space between them, in the team layout and in the spawn hierarchy", function ()
+{
+  var layout = frontend.wasBuildTeamLayout(teamRows({ master: ["lead", "a", "b", "c", "d"], lead: ["w1", "w2"], w1: [], w2: [], a: [], b: [], c: [], d: [] }));
+  var at = function (id) { return layout.positions.get(id); };
+  assert.equal(at("b").x - (at("a").x + at("a").width), 48, "side by side in a lane: 48");
+  assert.equal(at("c").y - (at("a").y + at("a").height), 48, "one row below the other: 48");
+  var masterLane = layout.lanes.find(function (lane) { return lane.id === "master"; });
+  var leadLane = layout.lanes.find(function (lane) { return lane.id === "lead"; });
+  assert.equal(leadLane.x - (masterLane.x + masterLane.width), 128, "between a lane and the lane to its right: 128");
+  assert.equal(at("a").x - masterLane.x, 28, "the lane panel keeps matching room around its cards");
+  var stacked = frontend.wasBuildTeamLayout(teamRows({ boss1: ["x1", "y1"], x1: [], y1: [], boss2: ["x2", "y2"], x2: [], y2: [] }));
+  var first = stacked.lanes.find(function (lane) { return lane.id === "boss1"; });
+  var second = stacked.lanes.find(function (lane) { return lane.id === "boss2"; });
+  assert.equal(second.y - (first.y + first.height), 128, "between two separate teams: 128");
+
+  var runtime = startPage(["ko"]);
+  addTestMessages(runtime);
+  runtime.elements["was-graph-layout"].value = "native";
+  runtime.wasUpdateSnapshot(demoSnapshot(runtime));
+  runtime.wasState.expanded.add("main");
+  runtime.wasUpdateView(false);
+  runtime.wasSetView("graph");
+  var cards = Array.from(runtime.wasState.graphPositions.values()).sort(function (first, second) { return first.y - second.y; });
+  assert.ok(cards.length >= 3);
+  assert.equal(cards[1].y - (cards[0].y + cards[0].height), 62, "rows of the spawn hierarchy: twice the former 31");
+  var deeper = cards.find(function (card) { return card.row.depth === 1; });
+  assert.equal(deeper.x - (cards[0].x + cards[0].width), 94, "one level deeper: twice the former 47");
+  var hit = runtime.wasState.graphPositions.get(cards[2].row.id);
+  var rect = { left: 0, top: 0, width: 900, height: 520 };
+  runtime.elements["was-graph"].getBoundingClientRect = function () { return rect; };
+  runtime.wasState.camera = { x: 0, y: 0, scale: 1 };
+  assert.equal(runtime.wasHitGraph(hit.x + 10, hit.y + 10), cards[2].row.id, "a click lands on the card it points at");
+  assert.equal(runtime.wasHitGraph(hit.x + 10, hit.y - 20), null, "the gap between two cards is empty");
+});
+
+test("a head without lanes to its right joins its member grid, and a lone session gets no panel", function ()
+{
+  var layout = frontend.wasBuildTeamLayout(teamRows({ boss: ["x", "y"], x: [], y: [], single: [] }));
+  assert.equal(layout.lanes.length, 1, "one lane for the team and none for a single stray session");
+  var head = layout.positions.get("boss");
+  var second = layout.positions.get("x");
+  assert.equal(head.y, second.y, "the head shares its first row with the first member");
+  assert.ok(second.x > head.x);
+  assert.equal(layout.positions.get("single").leafOf, undefined);
+  assert.deepEqual([1, 2, 3, 4, 6, 7, 12, 14, 60, 400].map(frontend.wasGridColumns), [1, 2, 2, 2, 3, 3, 4, 4, 6, 6]);
+  assert.equal(frontend.wasGridColumns(0), 0);
+});
+
+test("lines between a head and the members of its own lane stay hidden unless they carry more than the lane says", function ()
+{
+  var layout = frontend.wasBuildTeamLayout(teamRows({ boss: ["x", "y", "z"], x: [], y: [], z: [] }));
+  var pairs = frontend.wasBundleConnections([
+    edge("m1", "boss", "x", { type: "management" }), edge("s1", "boss", "x"), edge("m2", "boss", "y", { type: "management" }),
+    edge("c1", "boss", "y", { type: "collaboration", message: { deliveryId: "d1" } }), edge("m3", "boss", "z", { type: "management", conflicts: ["two managers"] }),
+    edge("peer", "x", "y", { type: "collaboration", message: { deliveryId: "d2" } })
+  ]);
+  var contained = function (id) { return frontend.wasIsContainedPair(pairs.find(function (pair) { return pair.id === id; }), layout.positions); };
+  assert.equal(contained(JSON.stringify(["boss", "x"].sort())), true, "management and spawn alone are the lane's own business");
+  assert.equal(contained(JSON.stringify(["boss", "y"].sort())), false, "a delivery between them is worth a line");
+  assert.equal(contained(JSON.stringify(["boss", "z"].sort())), false, "a conflict is never hidden");
+  assert.equal(contained(JSON.stringify(["x", "y"].sort())), false, "a line between two members is not the lane's business");
+});
+
+test("a team head routes to a lane on its right along the shared trunk", function ()
+{
+  var layout = frontend.wasBuildTeamLayout(teamRows({ master: ["lead", "other", "b", "c"], lead: ["w1", "w2"], other: ["w3"], w1: [], w2: [], w3: [], b: [], c: [] }));
+  var master = layout.positions.get("master");
+  ["lead", "other"].forEach(function (id)
+  {
+    var member = layout.positions.get(id);
+    var forward = frontend.wasRouteConnection({ from: "master", to: id }, layout.positions);
+    assert.equal(forward.points[0].x, master.x + master.width);
+    assert.ok(forward.points.some(function (point) { return point.x === master.trunkX; }), id + " is reached through the trunk");
+    assert.equal(forward.points[forward.points.length - 1].x, member.x);
+    var backward = frontend.wasRouteConnection({ from: id, to: "master" }, layout.positions);
+    assert.equal(backward.points[0].x, member.x, "a route always starts at pair.from");
+    assert.equal(backward.points[backward.points.length - 1].x, master.x + master.width);
+  });
+  var plain = new Map([["a", { x: 0, y: 0, width: 100, height: 50 }], ["b", { x: 200, y: 100, width: 100, height: 50 }]]);
+  assert.equal(frontend.wasRouteConnection({ from: "a", to: "b" }, plain).points.length, 4, "positions without a trunk route as before");
+});
+
+test("a beam follows the drawn route: rounded corners keep its length close to the polyline and a slice runs between two distances", function ()
+{
+  var route = { points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 200, y: 100 }] };
+  var curve = frontend.wasRouteCurve(route);
+  assert.equal(route.curve, curve, "the curve is kept on its route");
+  assert.equal(frontend.wasRouteCurve(route), curve);
+  assert.ok(curve.length < 300 && curve.length > 280, "cutting the corners shortens the path a little");
+  assert.deepEqual([curve.points[0].x, curve.points[0].y], [0, 0]);
+  var last = curve.points[curve.points.length - 1];
+  assert.deepEqual([last.x, last.y], [200, 100]);
+  var slice = frontend.wasCurveSlice(curve, 0, 50);
+  assert.deepEqual([slice[0].x, slice[0].y, slice[slice.length - 1].x, slice[slice.length - 1].y].map(function (value) { return Math.round(value * 1e6) / 1e6; }), [0, 0, 50, 0]);
+  var swapped = frontend.wasCurveSlice(curve, 50, 0);
+  assert.deepEqual(swapped.map(function (point) { return [point.x, point.y]; }), slice.map(function (point) { return [point.x, point.y]; }), "either order gives the same points");
+  var around = frontend.wasCurveSlice(curve, 80, 160);
+  assert.ok(around.length > 3, "a slice across a corner keeps the points of the corner");
+  var all = frontend.wasCurveSlice(curve, -10, 9999);
+  assert.deepEqual([all[0].x, all[all.length - 1].x], [0, 200], "distances are clamped to the route");
+  var straight = frontend.wasRouteCurve({ points: [{ x: 0, y: 0 }, { x: 0, y: 40 }] });
+  assert.equal(straight.length, 40);
+});
+
+test("a connection has one beam that runs from its start to past its end, rests, and stands still for reduced motion", function ()
+{
+  assert.equal(frontend.wasLaserHead(500, 3, 10, true), 360);
+  var length = 500;
+  var heads = [];
+  for (var tenth = 0; tenth < 200; tenth += 1) heads.push(frontend.wasLaserHead(length, tenth / 10, 0, false));
+  var running = heads.filter(function (head) { return head !== null; });
+  assert.ok(running.length > 0 && running.length < heads.length, "the beam runs and then rests");
+  assert.ok(running.every(function (head) { return head >= 0 && head < length + 84; }), "a beam is gone once its tail has left the route");
+  assert.ok(Math.abs(frontend.wasLaserHead(length, .1, 0, false) - frontend.wasLaserHead(length, 0, 0, false) - 30) < 1e-9, "the head moves 300 distance units per second");
+  for (var n = 0; n < 50; n += 1)
+  {
+    var seed = frontend.wasRouteSeed("pair-" + n);
+    assert.ok(seed >= 0 && seed < 220);
+  }
+  assert.equal(frontend.wasRouteSeed("same"), frontend.wasRouteSeed("same"));
+  assert.notEqual(frontend.wasRouteSeed("a"), frontend.wasRouteSeed("b"));
+});
+
+test("each connection gets its own beam color, in the order it is first seen, and keeps it", function ()
+{
+  var runtime = startPage(["ko"]);
+  var colors = [];
+  for (var index = 0; index < 8; index += 1) colors.push(runtime.wasLaserColor("pair-" + index));
+  assert.equal(new Set(colors).size, 8, "eight connections get eight different colors");
+  assert.ok(colors.every(function (color) { return /^#[0-9a-f]{6}$/i.test(color); }));
+  assert.equal(runtime.wasLaserColor("pair-3"), colors[3], "a connection keeps its color");
+  assert.equal(runtime.wasLaserColor("pair-8"), colors[0], "the ninth connection starts the palette again");
+  assert.equal(runtime.wasLaserColor("pair-9"), colors[1]);
+});
+
+test("a hidden graph is neither centered nor fitted on stale numbers: the next visit does it", function ()
+{
+  var runtime = startPage(["ko"]);
+  addTestMessages(runtime);
+  runtime.wasUpdateSnapshot(demoSnapshot(runtime));
+  assert.equal(runtime.wasState.graphPositions, null);
+  runtime.wasCenterNode("main");
+  assert.equal(runtime.wasState.pendingCenterId, "main", "the request is remembered instead of throwing");
+  runtime.wasState.graphInitialized = true;
+  var camera = runtime.wasState.camera;
+  runtime.wasFitGraph();
+  assert.equal(runtime.wasState.camera, camera, "the camera of a hidden graph is left alone");
+  assert.equal(runtime.wasState.graphInitialized, false, "the graph asks to be fitted when it is shown");
+
+  runtime.wasState.canvasWidth = 900;
+  runtime.wasState.canvasHeight = 520;
+  runtime.wasState.selectedId = "main";
+  runtime.wasSetView("graph");
+  assert.equal(runtime.wasState.pendingCenterId, "");
+  var point = runtime.wasState.graphPositions.get("main");
+  var scale = runtime.wasState.camera.scale;
+  assert.ok(Math.abs(runtime.wasState.camera.x - (450 - (point.x + point.width / 2) * scale)) < 1e-6, "a selection made while hidden is centered when the graph appears");
+
+  runtime.wasSetView("tree");
+  runtime.wasCenterNode("quiet");
+  runtime.wasState.selectedId = "main";
+  runtime.wasSetView("graph");
+  assert.equal(runtime.wasState.pendingCenterId, "", "the request is dropped once handled");
+  var quiet = runtime.wasState.graphPositions.get("quiet");
+  var camera2 = runtime.wasState.camera;
+  var offX = Math.abs(camera2.x - (450 - (quiet.x + quiet.width / 2) * camera2.scale));
+  var offY = Math.abs(camera2.y - (260 - (quiet.y + quiet.height / 2) * camera2.scale));
+  assert.ok(offX > 1 || offY > 1, "a request for a session that is no longer the selected one is not honored");
+});
+
+test("graph detail follows the zoom in three steps and the ramp stays between 0 and 1", function ()
+{
+  assert.equal(frontend.wasGraphDetail(.1), "block");
+  assert.equal(frontend.wasGraphDetail(.299), "block");
+  assert.equal(frontend.wasGraphDetail(.3), "name");
+  assert.equal(frontend.wasGraphDetail(.549), "name");
+  assert.equal(frontend.wasGraphDetail(.55), "full");
+  assert.equal(frontend.wasGraphDetail(4), "full");
+  assert.equal(frontend.wasRamp(.4, .5, .7), 0);
+  assert.equal(frontend.wasRamp(.6, .5, .7), .5);
+  assert.equal(frontend.wasRamp(.9, .5, .7), 1);
+});
+
+test("a connection line names the weakest evidence of its pair and flows while a delivery is unresolved, but is never dashed", function ()
+{
+  var style = function (edges) { return frontend.wasConnectionStyle(frontend.wasBundleConnections(edges)[0]); };
+  var confirmed = style([edge("a", "a", "b")]);
+  assert.equal(confirmed.evidence, "confirmed");
+  assert.equal(confirmed.flowing, false);
+  assert.equal(style([edge("a", "a", "b"), edge("b", "a", "b", { confidence: "inferred" })]).evidence, "inferred");
+  assert.equal(style([edge("a", "a", "b", { confidence: "inferred" })]).evidence, "inferred");
+  assert.equal("dash" in confirmed, false, "no line is ever patterned");
+  var unconfirmed = style([edge("a", "a", "b", { confidence: "inferred" }), edge("b", "a", "b", { confidence: "unresolved" })]);
+  assert.equal(unconfirmed.evidence, "unresolved");
+  var mixed = style([edge("a", "a", "b", { type: "management" }), edge("b", "a", "b", { type: "spawn", confidence: "unresolved" })]);
+  assert.equal(mixed.evidence, "unresolved", "several relation types still make one line with one pattern");
+  var flowing = style([edge("a", "a", "b", { type: "collaboration", status: "queued", message: { deliveryId: "d1" } })]);
+  assert.equal(flowing.flowing, true);
+  assert.equal(flowing.forward, true);
+  var backward = style([edge("a", "b", "a", { type: "collaboration", status: "queued", message: { deliveryId: "d1" } })]);
+  assert.equal(backward.flowing, true);
+  assert.equal(backward.forward, false, "the dots travel from b toward a, against the sorted pair order");
+  var resolved = style([edge("a", "a", "b", { type: "collaboration", status: "reply-recorded", message: { deliveryId: "d1", finishedAt: "2026-01-01T00:00:00Z" } })]);
+  assert.equal(resolved.flowing, false);
+});
+
+test("the focus of a selection is the selected session and its neighbours", function ()
+{
+  var pairs = frontend.wasBundleConnections([edge("a", "a", "b"), edge("b", "c", "a"), edge("c", "b", "d"), edge("d", "e", "f")]);
+  assert.deepEqual(Array.from(frontend.wasGraphNeighbors(pairs, "a")).sort(), ["a", "b", "c"]);
+  assert.deepEqual(Array.from(frontend.wasGraphNeighbors(pairs, "d")), ["d", "b"]);
+  assert.deepEqual(Array.from(frontend.wasGraphNeighbors(pairs, "lonely")), ["lonely"]);
+});
+
+test("a label finds the nearest point of its route for the leader line", function ()
+{
+  var route = { points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }] };
+  var above = frontend.wasRouteAnchor(route, 50, 30);
+  assert.deepEqual([above.x, above.y, above.distance], [50, 0, 30]);
+  var beside = frontend.wasRouteAnchor(route, 130, 60);
+  assert.deepEqual([beside.x, beside.y, beside.distance], [100, 60, 30]);
+  var beyond = frontend.wasRouteAnchor(route, -20, -15);
+  assert.deepEqual([beyond.x, beyond.y], [0, 0]);
+  assert.equal(frontend.wasRouteAnchor(route, 100, 50).distance, 0);
+});
+
+test("the minimap appears only for a large graph that does not fit the view, and stays inside the canvas", function ()
+{
+  var bounds = { width: 4000, height: 1200 };
+  var fitting = { x: 20, y: 20, scale: .2 };
+  assert.equal(frontend.wasMinimapLayout(bounds, fitting, 1000, 600, 40), null, "everything is already in view");
+  var zoomed = { x: -800, y: 0, scale: 1 };
+  assert.equal(frontend.wasMinimapLayout(bounds, zoomed, 1000, 600, 7), null, "too few sessions to need an overview");
+  assert.equal(frontend.wasMinimapLayout(bounds, zoomed, 400, 600, 40), null, "a narrow canvas has no room for it");
+  var layout = frontend.wasMinimapLayout(bounds, zoomed, 1000, 600, 40);
+  assert.ok(layout.x >= 0 && layout.y >= 0 && layout.x + layout.width <= 1000 && layout.y + layout.height <= 600);
+  assert.ok(layout.width <= 221 && layout.height <= 131);
+  assert.ok(Math.abs(layout.width / layout.height - bounds.width / bounds.height) < .2, "the overview keeps the graph's proportions");
+});
+
+function recordingContext()
+{
+  var calls = [];
+  var values = {};
+  var methods = /^(arc|arcTo|beginPath|clearRect|clip|closePath|fill|fillRect|lineTo|moveTo|quadraticCurveTo|restore|save|scale|setLineDash|setTransform|stroke|strokeRect|translate)$/;
+  return new Proxy({}, {
+    get: function (target, name)
+    {
+      if (name === "calls") return calls;
+      if (name === "measureText") return function (text) { return { width: String(text).length * 6 }; };
+      if (name === "createLinearGradient") return function () { return { addColorStop: function () {} }; };
+      if (name === "fillText") return function (text) { calls.push(["fillText", String(text)]); };
+      if (typeof name === "string" && methods.test(name)) return function () { calls.push([name]); };
+      return values[name];
+    },
+    set: function (target, name, value) { values[name] = value; return true; }
+  });
+}
+
+function drawnTexts(context)
+{
+  return context.calls.filter(function (call) { return call[0] === "fillText"; }).map(function (call) { return call[1]; });
+}
+
+test("only the visible view is built: a hidden graph or list stays out of date until it is shown", function ()
+{
+  var runtime = startPage(["ko"]);
+  addTestMessages(runtime);
+  assert.equal(runtime.wasState.viewMode, "tree");
+  runtime.wasUpdateSnapshot(demoSnapshot(runtime));
+  assert.equal(runtime.wasState.graphPositions, null, "no layout is made while the list is the view");
+  assert.equal(runtime.wasState.graphStale, true);
+  assert.ok(runtime.elements["was-tree-rows"].children.length > 0, "the list renders its rows");
+
+  runtime.wasSetView("graph");
+  var built = runtime.wasState.graphPositions;
+  assert.ok(built && built.size === 3 && runtime.wasState.graphEdges.length > 0, "switching to the graph builds it");
+  assert.equal(runtime.wasState.graphStale, false);
+
+  var rows = runtime.elements["was-tree-rows"];
+  rows.children = [];
+  runtime.wasUpdateView(false);
+  assert.equal(runtime.wasState.graphStale, false, "a visible graph is rebuilt at once");
+  assert.notEqual(runtime.wasState.graphPositions, built);
+  assert.equal(rows.children.length, 0, "the hidden list renders nothing");
+
+  runtime.wasSetView("tree");
+  assert.ok(rows.children.length > 0, "switching back renders the list");
+  var kept = runtime.wasState.graphPositions;
+  runtime.wasUpdateView(false);
+  runtime.wasSelectNode("main", false, false);
+  runtime.wasState.camera = { x: 0, y: 0, scale: 1 };
+  assert.equal(runtime.wasState.graphPositions, kept, "no layout or routing runs for a hidden graph");
+  assert.equal(runtime.wasState.graphStale, true);
+
+  runtime.wasSetView("graph");
+  assert.notEqual(runtime.wasState.graphPositions, kept, "the next visit rebuilds it from the current data");
+  assert.equal(runtime.wasState.graphStale, false);
+});
+
+test("the graph draws at every zoom step with a selection, a hover and a selected connection without throwing", function ()
+{
+  var runtime = startPage(["ko"]);
+  addTestMessages(runtime);
+  runtime.wasUpdateSnapshot(demoSnapshot(runtime));
+  runtime.wasSetView("graph");
+  var context = recordingContext();
+  runtime.elements["was-graph"].getContext = function () { return context; };
+  runtime.wasState.canvasWidth = 900;
+  runtime.wasState.canvasHeight = 520;
+  runtime.wasState.pixelRatio = 2;
+  runtime.wasState.viewMode = "graph";
+  var draw = function (scale, setup)
+  {
+    context.calls.length = 0;
+    runtime.wasState.camera = { x: 10, y: 10, scale: scale };
+    runtime.wasState.selectedId = null;
+    runtime.wasState.selectedPairId = null;
+    runtime.wasState.hoverId = null;
+    runtime.wasState.hoverPairId = "";
+    if (setup) setup();
+    runtime.wasDrawGraph();
+    return drawnTexts(context);
+  };
+  var full = draw(1);
+  assert.ok(full.indexOf("alpha-main") !== -1 && full.indexOf("alpha-quiet") !== -1, "names are drawn on the full cards");
+  assert.ok(full.some(function (text) { return text.indexOf("미해결") !== -1; }), "the delivery queue row is drawn");
+  var names = draw(.4);
+  assert.ok(names.indexOf("alpha-quiet") !== -1, "names stay at a middle zoom");
+  assert.equal(names.some(function (text) { return text.indexOf("미해결") !== -1; }), false, "the detail rows have faded");
+  var far = draw(.15);
+  assert.equal(far.indexOf("alpha-quiet"), -1, "a plain block carries no text");
+  assert.equal(runtime.wasState.graphLabelHits.length, 0, "no label or dot can be hit while only blocks are drawn");
+  draw(1, function () { runtime.wasSelectNode("main", false, false); });
+  assert.ok(runtime.wasGraphFocus().ids.has("quiet") && runtime.wasGraphFocus().ids.has("ghost"));
+  assert.equal(runtime.wasGraphFocus().soft, false);
+  draw(1, function () { runtime.wasState.hoverId = "quiet"; });
+  assert.equal(runtime.wasGraphFocus().soft, true, "a hover alone dims less");
+  draw(.45, function () { runtime.wasState.hoverId = "quiet"; });
+  var pair = runtime.wasState.graphEdges.find(function (entry) { return entry.deliveryCount > 0; });
+  draw(1, function () { runtime.wasSelectConnection(pair.id); });
+  var focus = runtime.wasGraphFocus();
+  assert.deepEqual(Array.from(focus.ids).sort(), [pair.from, pair.to].sort());
+  runtime.wasState.selectedPairId = null;
+  runtime.wasState.selectedId = null;
+  runtime.wasState.hoverId = "not-in-the-graph";
+  assert.equal(runtime.wasGraphFocus(), null, "a node that is not drawn dims nothing");
+  assert.ok(context.calls.length > 0);
+});
+
 test("pressing the selected character again closes its detail, and reopens it when the wide overlay was hidden by hand", function ()
 {
   var runtime = frontendRuntime();
@@ -714,7 +1109,7 @@ test("pressing the selected character again closes its detail, and reopens it wh
   runtime.wasElements = { officeStage: runtimeElement(), focusBranch: runtimeElement(), announcement: runtimeElement(),
     presentationDetail: Object.assign(runtimeElement(), { setAttribute: function (name, value) { expanded = value; } }) };
   runtime.wasSelectNode = function (id) { runtime.wasState.selectedId = id; calls.push("select:" + id); };
-  ["wasRenderTree", "wasRenderDetails", "wasUpdateGraphEdges", "wasRequestGraphDraw", "wasRenderOfficeFloor"].forEach(function (name)
+  ["wasRenderTree", "wasRenderDetails", "wasUpdateGraphEdges", "wasRefreshGraphSelection", "wasRequestGraphDraw", "wasRenderOfficeFloor"].forEach(function (name)
   {
     runtime[name] = function () { calls.push(name); };
   });
@@ -1241,6 +1636,7 @@ test("every renderer avoids Hangul in English and shows Korean wording in Korean
     addTestMessages(runtime);
     runtime.wasUpdateSnapshot(demoSnapshot(runtime));
     runtime.elements["was-project"].value = "";
+    runtime.wasSetView("graph");
     runtime.wasSelectNode("main", false, false);
     runtime.wasState.expanded.add("main");
     runtime.wasUpdateView(false);

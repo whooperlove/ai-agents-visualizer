@@ -219,6 +219,7 @@
       "app.graph.omitCollapsed": "Collapsed {number}",
       "app.graph.omitType": "Relation type {number}",
       "app.graph.omitScope": "Connection scope {number}",
+      "app.graph.omitLanes": "Lines inside lanes {number}",
       "app.graph.count": "Original relations {visible} / {total} · Connections {connections}",
       "app.graph.hiddenRelations": "Hidden relations: {list}",
       "app.graph.allShown": "Every collected relation is shown.",
@@ -242,6 +243,8 @@
       "app.card.hiddenByScope": { one: "{number} descendant outside the activity scope", other: "{number} descendants outside the activity scope" },
       "app.card.queueCounts": "Sent {sent}  Received {received}",
       "app.card.queueUnresolved": "Unresolved sent {unresolved}",
+      "app.lane.team": { one: "Team · {number} member", other: "Team · {number} members" },
+      "app.lane.solo": { one: "No team · {number} session", other: "No team · {number} sessions" },
 
       "app.feed.summary": "Deliveries in the selected project {deliveries} · Unresolved sent {unresolved} · Observed since the initial full collection {observed}",
       "app.feed.summaryOlder": "({older} earlier observations summarized; see the session details for the original records)",
@@ -495,6 +498,7 @@
       "app.graph.omitCollapsed": "접힘 {number}",
       "app.graph.omitType": "관계 유형 {number}",
       "app.graph.omitScope": "연결 범위 {number}",
+      "app.graph.omitLanes": "레인 안 연결 {number}",
       "app.graph.count": "원본 관계 {visible} / {total}개 · 연결 {connections}개",
       "app.graph.hiddenRelations": "숨겨진 관계: {list}",
       "app.graph.allShown": "수집된 모든 관계를 표시하고 있습니다.",
@@ -518,6 +522,8 @@
       "app.card.hiddenByScope": { other: "하위 {number}개 활동 범위 밖" },
       "app.card.queueCounts": "발신 {sent}  수신 {received}",
       "app.card.queueUnresolved": "미해결 발신 {unresolved}",
+      "app.lane.team": { other: "팀 · 구성원 {number}명" },
+      "app.lane.solo": { other: "팀 없음 · 세션 {number}개" },
 
       "app.feed.summary": "선택 프로젝트 전달 {deliveries}건 · 미해결 발신 {unresolved}건 · 전체 초기 수집 이후 관측 {observed}회",
       "app.feed.summaryOlder": "(이전 {older}회 요약, 원본 기록은 세션 상세에서 확인)",
