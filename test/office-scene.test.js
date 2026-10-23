@@ -626,6 +626,34 @@ Test('a working session with recent activity gets a green outline on its plate a
   Assert.ok(/border-right: 2px solid;/.test(tail) && /border-bottom: 2px solid;/.test(tail), 'the tail outline is 2px as well');
   Assert.ok(tail.indexOf('border-right-color: inherit;') >= 0 && tail.indexOf('border-bottom-color: inherit;') >= 0, 'the tail follows the plate color in hover and selection');
   Assert.ok(css.indexOf(selector) < css.indexOf('.was-office-actor-label.was-office-actor-selected[data-was-provider="codex"]'), 'a selected plate keeps its own color');
+  Assert.ok(/width: 10px;/.test(tail) && /height: 10px;/.test(tail) && /margin-left: -5px;/.test(tail), 'the tail box keeps the plain tail size, its center on the plate edge');
+});
+
+Test('a name tag is an opaque plate and its tail inherits fill and outline, so both are always the same color', function ()
+{
+  var css = Fs.readFileSync(Path.join(__dirname, '../public/office-scene.css'), 'utf8');
+  function rule(text)
+  {
+    var at = css.indexOf(text + '\n{');
+    Assert.ok(at >= 0, text + ' has a rule');
+    return css.slice(at, css.indexOf('}', at));
+  }
+  ['--was-plate', '--was-plate-strong', '--was-plate-dim'].forEach(function (name)
+  {
+    Assert.ok(new RegExp(name + ': rgb\\(\\d+, \\d+, \\d+\\);').test(css), name + ' is an opaque color');
+  });
+  var plate = rule('.was-office-actor-label');
+  Assert.ok(plate.indexOf('background: var(--was-plate);') >= 0, 'the plate fill is the opaque plate color');
+  Assert.ok(plate.indexOf('backdrop-filter') < 0, 'nothing shows through the plate, so there is no backdrop blur to differ from the tail');
+  [rule('.was-office-actor-label[data-was-activity="inactive"]'), rule('.was-office-actor-label:hover,\n.was-office-actor-label:focus-visible'),
+    rule('.was-office-actor-label.was-office-actor-selected')].forEach(function (state)
+  {
+    Assert.ok(/background: var\(--was-plate(-strong|-dim)\);/.test(state), 'every plate state keeps an opaque fill');
+  });
+  var tail = rule('.was-office-actor-label::after');
+  Assert.ok(tail.indexOf('background: inherit;') >= 0, 'the tail takes the plate background in every state');
+  Assert.ok(tail.indexOf('border-right-color: inherit;') >= 0 && tail.indexOf('border-bottom-color: inherit;') >= 0, 'the tail outline follows the plate border in every state');
+  Assert.ok(tail.indexOf('clip-path') < 0, 'an opaque tail needs no cut, with or without its rotation');
 });
 
 Test('stacks follow their character across floors and wheel input over a stack still pans or switches floors', function ()
@@ -926,7 +954,7 @@ Test('pressing a nameplate or character twice reports a repeat so the host can c
 function tagTexts(label)
 {
   return { provider: find(label, 'was-office-actor-provider').textContent, activity: find(label, 'was-office-actor-activity').textContent,
-    status: find(label, 'was-office-actor-role').textContent, title: label.title, aria: label.attributes['aria-label'] };
+    status: find(label, 'was-office-actor-role').textContent, tooltip: label.title || label.attributes.title || '', aria: label.attributes['aria-label'] };
 }
 
 function englishStack(browser, actorId)
@@ -952,12 +980,12 @@ Test('English name tags show the status, activity and provider wording the gloss
   {
     var texts = tagTexts(labelFor(browser, id));
     Assert.deepEqual([texts.provider, texts.activity, texts.status], expected[id], id);
-    Assert.equal(texts.title, 'codex-project-' + id + ' · ' + expected[id].join(' · '));
-    Assert.equal(texts.aria, texts.title);
+    Assert.equal(texts.aria, 'codex-project-' + id + ' · ' + expected[id].join(' · '));
+    Assert.equal(texts.tooltip, '', 'a name tag has no title attribute, so the browser shows no native tooltip over it');
   });
   var items = find(browser.container, 'was-office-session-list').children;
   Assert.equal(items.length, 8);
-  Assert.equal(items[0].textContent, labelFor(browser, 'a').title);
+  Assert.equal(items[0].textContent, labelFor(browser, 'a').attributes['aria-label']);
   Assert.equal(find(browser.container, 'was-office-session-index').children[0].textContent, 'All sessions on this floor · 8');
   Assert.equal(browser.renderer.statusText({ status: 'failed' }), 'Error');
   Assert.equal(browser.renderer.activityText({ activity: { category: 'recent' }, status: 'idle' }), 'Recent');
@@ -1063,8 +1091,8 @@ Test('refreshText re-renders every text for the new language and leaves camera, 
   Assert.strictEqual(englishStack(browser, 'a'), stack);
   var english = tagTexts(label);
   Assert.deepEqual([english.provider, english.activity, english.status], ['Codex', 'Recent', 'Idle']);
-  Assert.equal(english.title, 'codex-project-c · Codex · Recent · Idle');
-  Assert.equal(english.aria, english.title);
+  Assert.equal(english.aria, 'codex-project-c · Codex · Recent · Idle');
+  Assert.equal(english.tooltip, '');
   Assert.equal(tagTexts(labelFor(browser, 'a')).status, 'Idle');
   Assert.equal(find(browser.container, 'was-office-session-list').children[0].textContent.indexOf('codex-project-') === 0, true);
   Assert.equal(find(browser.container, 'was-office-session-index').children[0].textContent, 'All sessions on this floor · 3');

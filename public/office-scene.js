@@ -2114,8 +2114,9 @@ var WasOfficeScene = null;
         label.element.setAttribute('data-was-provider', text(actor.provider));
         label.element.setAttribute('data-was-activity', resting(actor) ? 'inactive' : actor.activity && actor.activity.category || 'unconfirmed');
         label.element.setAttribute('data-was-status', statusKey(actor));
-        label.element.title = name + ' · ' + label.provider.textContent + ' · ' + label.activity.textContent + ' · ' + label.status.textContent;
-        label.element.setAttribute('aria-label', label.element.title);
+        /* Read out by assistive technology and listed in the session index; never a title attribute, which browsers show as a tooltip over the plate. */
+        var description = name + ' · ' + label.provider.textContent + ' · ' + label.activity.textContent + ' · ' + label.status.textContent;
+        label.element.setAttribute('aria-label', description);
         label.width = labelWidth(name);
         var item = indexItems.get(actor.id);
         if (!item)
@@ -2132,7 +2133,7 @@ var WasOfficeScene = null;
           indexList.appendChild(item);
           indexItems.set(actor.id, item);
         }
-        item.textContent = label.element.title;
+        item.textContent = description;
       });
       indexCount = layout.actors.length;
       summary.textContent = summaryText();

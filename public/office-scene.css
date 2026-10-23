@@ -11,6 +11,11 @@
   --was-stage-glass: rgba(17, 19, 24, 0.8);
   --was-stage-glass-strong: rgba(17, 19, 24, 0.92);
   --was-stage-line: rgba(255, 255, 255, 0.1);
+  /* Nameplate fills are opaque on purpose: the tail inherits the plate's background, and only an opaque color stays identical
+     whatever lies behind the plate or its shadow. */
+  --was-plate: rgb(38, 40, 46);
+  --was-plate-strong: rgb(26, 28, 33);
+  --was-plate-dim: rgb(56, 58, 64);
   --was-stage-text: #f3f4f6;
   --was-stage-text-2: rgba(236, 238, 241, 0.74);
   --was-office-name-size: 12px;
@@ -239,9 +244,7 @@
   padding: 6px 12px 7px;
   border: 1px solid var(--was-stage-line);
   border-radius: 12px;
-  background: var(--was-stage-glass);
-  -webkit-backdrop-filter: blur(8px) saturate(1.2);
-  backdrop-filter: blur(8px) saturate(1.2);
+  background: var(--was-plate);
   box-shadow: 0 8px 22px rgba(10, 8, 12, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   color: var(--was-stage-text);
   white-space: nowrap;
@@ -260,13 +263,16 @@
   width: 10px;
   height: 10px;
   margin-left: -5px;
-  border-right: 1px solid var(--was-stage-line);
-  border-bottom: 1px solid var(--was-stage-line);
+  border-right: 1px solid;
+  border-bottom: 1px solid;
+  border-right-color: inherit;
+  border-bottom-color: inherit;
   border-bottom-right-radius: 3px;
   background: inherit;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
   transform: rotate(45deg);
+  /* The box is 10px with its border inside (border-box), its center on the plate's outer edge. Background and outline are
+     inherited, so the tail is always the plate's own color in every state. The half that sits over the plate is the same
+     opaque color and so hides the plate's border line across the tail's mouth. */
 }
 .was-office-actor-label[hidden],
 .was-office-empty[hidden],
@@ -379,7 +385,7 @@
 }
 .was-office-actor-label[data-was-activity="inactive"]
 {
-  background: rgba(17, 19, 24, 0.66);
+  background: var(--was-plate-dim);
 }
 .was-office-actor-label[data-was-activity="inactive"] .was-office-actor-name
 {
@@ -399,9 +405,9 @@
 .was-office-actor-label[data-was-status="running"][data-was-activity="recent"]::after
 {
   bottom: -7px;
-  width: 9px;
-  height: 9px;
-  margin-left: -5.5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
   border-right: 2px solid;
   border-bottom: 2px solid;
   border-right-color: inherit;
@@ -412,7 +418,7 @@
 {
   outline: none;
   border-color: rgba(255, 255, 255, 0.24);
-  background: var(--was-stage-glass-strong);
+  background: var(--was-plate-strong);
 }
 .was-office-actor-label:focus-visible
 {
@@ -421,7 +427,7 @@
 .was-office-actor-label.was-office-actor-selected
 {
   border-color: var(--was-accent, #f0a35e);
-  background: var(--was-stage-glass-strong);
+  background: var(--was-plate-strong);
   box-shadow: 0 0 0 1px var(--was-accent, #f0a35e), 0 0 18px rgba(240, 163, 94, 0.32), 0 10px 24px rgba(10, 8, 12, 0.34);
 }
 .was-office-actor-label.was-office-actor-selected[data-was-provider="codex"]
