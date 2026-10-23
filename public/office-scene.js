@@ -2622,6 +2622,14 @@ var WasOfficeScene = null;
       requestDraw();
     }
 
+    /* A tap on empty stage lets go of the selection, like an empty click on the graph; the host decides what that closes. */
+    function releaseSelection()
+    {
+      if (selectedId === null) return;
+      clearSelection();
+      if (typeof options.onDeselect === 'function') options.onDeselect();
+    }
+
     function selectActor(id, settings)
     {
       settings = settings || {};
@@ -2796,6 +2804,7 @@ var WasOfficeScene = null;
       if (!clicked) return;
       var id = pick(eventPoint(event));
       if (id) clickActor(id);
+      else releaseSelection();
     }
 
     function didWheel(event)

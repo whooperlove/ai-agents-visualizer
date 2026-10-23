@@ -1558,6 +1558,13 @@ function wasEnsureOffice()
         wasElements.presentationDetail.setAttribute("aria-expanded", "true");
       }
     },
+    onDeselect: function ()
+    {
+      if (wasState.selectedId || wasState.selectedPairId)
+      {
+        wasCloseDetail();
+      }
+    },
     onFloorChange: function (id)
     {
       wasState.officeFloorId = id;

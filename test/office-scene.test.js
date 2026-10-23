@@ -432,6 +432,36 @@ Test('wheel and dragging pan horizontally while zoom stays an explicit action', 
   scene.destroy();
 });
 
+Test('a tap on empty stage releases the selection and tells the host, but a drag or a tap with nothing selected does not', function ()
+{
+  var browser = createBrowserHarness();
+  var released = 0;
+  var scene = browser.renderer.create({ container: browser.container, onDeselect: function () { released += 1; } });
+  scene.setOffice(makeOffice());
+  browser.flush();
+  var canvas = find(browser.container, 'was-office-canvas was-office-character-canvas');
+  function tap(x, y)
+  {
+    canvas.dispatch('pointerdown', { pointerId: 1, clientX: x, clientY: y, button: 0 });
+    canvas.dispatch('pointerup', { pointerId: 1, clientX: x, clientY: y });
+  }
+  tap(2, 2);
+  Assert.equal(released, 0, 'nothing was selected, so there is nothing to release');
+  scene.select('a');
+  Assert.equal(scene.getState().selectedId, 'a');
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 500, clientY: 350, button: 0 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 300, clientY: 360 });
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 300, clientY: 360 });
+  Assert.equal(scene.getState().selectedId, 'a', 'dragging the stage keeps the selection');
+  Assert.equal(released, 0);
+  tap(2, 2);
+  Assert.equal(scene.getState().selectedId, null, 'a tap on empty stage releases the selection');
+  Assert.equal(released, 1, 'the host is told once');
+  tap(2, 2);
+  Assert.equal(released, 1, 'a second tap has nothing left to release');
+  scene.destroy();
+});
+
 Test('shift and wheel switch floors one at a time and the stage names the current floor', function ()
 {
   var browser = createBrowserHarness();
