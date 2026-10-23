@@ -382,3 +382,135 @@ Test('the startup line follows the process locale and --lang', function(t, done)
     });
   });
 });
+
+Test('the supplement folder defaults to <home>/.config/ai-agents-visualizer/supplements and --no-supplement turns it off', function()
+{
+  const home = Path.join(Os.tmpdir(), 'a-home');
+  const folder = Path.join(home, '.config', 'ai-agents-visualizer', 'supplements');
+  Assert.equal(Server.defaultSupplementDir(home), folder);
+  Assert.equal(Server.parseOptions(['--home', home]).supplementDir, folder);
+  Assert.deepEqual(Server.parseOptions(['--home', home]).supplements, []);
+  const withFile = Server.parseOptions(['--home', home, '--supplement', '/tmp/extra.json']);
+  Assert.equal(withFile.supplementDir, folder, 'an explicit file adds to the folder instead of replacing it');
+  Assert.deepEqual(withFile.supplements, [Path.resolve('/tmp/extra.json')]);
+  const off = Server.parseOptions(['--home', home, '--no-supplement']);
+  Assert.equal(off.supplementDir, null);
+  Assert.deepEqual(off.supplements, []);
+  const offThenFile = Server.parseOptions(['--home', home, '--no-supplement', '--supplement', '/tmp/extra.json']);
+  Assert.equal(offThenFile.supplementDir, null);
+  Assert.deepEqual(offThenFile.supplements, [Path.resolve('/tmp/extra.json')]);
+});
+
+async function waitFor(check, message)
+{
+  const started = Date.now();
+  while (!check())
+  {
+    if (Date.now() - started > 5000) throw new Error('timed out waiting for ' + message);
+    await new Promise(function(resolve) { setTimeout(resolve, 25); });
+  }
+}
+
+Test('supplement folder files are loaded, followed, removed and reported one by one', async function(t)
+{
+  const home = tempHome(t);
+  const folder = Server.defaultSupplementDir(home);
+  function document(id, name) { return JSON.stringify({ schemaVersion: 1, sessions: [{ id: id, name: name }], relations: [] }); }
+  const app = Server.createObserverServer({ home: home, port: 0, pollIntervalMs: 50, supplements: [], supplementDir: folder });
+  t.after(function() { return new Promise(function(resolve) { app.stop(resolve); }); });
+  await new Promise(function(resolve, reject) { app.start(function(error) { return error ? reject(error) : resolve(); }); });
+  function ids() { return app.snapshot().nodes.map(function(node) { return node.id; }); }
+  function nameOf(id) { const found = app.snapshot().nodes.find(function(node) { return node.id === id; }); return found && found.name; }
+  function problems() { return app.snapshot().diagnostics.filter(function(item) { return item.code === 'supplement-invalid'; }); }
+
+  await new Promise(function(resolve) { setTimeout(resolve, 250); });
+  Assert.equal(problems().length, 0, 'a missing folder is not an error');
+
+  Fs.mkdirSync(folder, { recursive: true });
+  Fs.writeFileSync(Path.join(folder, 'a.json'), document('codex:folder-a', 'first a'));
+  Fs.writeFileSync(Path.join(folder, '.hidden.json'), document('codex:hidden', 'hidden'));
+  Fs.writeFileSync(Path.join(folder, 'notes.txt'), 'not a supplement');
+  await waitFor(function() { return ids().includes('codex:folder-a'); }, 'a.json to load');
+  Assert.ok(!ids().includes('codex:hidden'), 'dot files are ignored');
+
+  Fs.writeFileSync(Path.join(folder, 'b.json'), document('codex:folder-b', 'first b'));
+  await waitFor(function() { return ids().includes('codex:folder-b'); }, 'b.json to load');
+
+  Fs.writeFileSync(Path.join(folder, 'bad.json'), '{broken');
+  await waitFor(function() { return problems().length === 1; }, 'the broken file to be reported');
+  Assert.ok(problems()[0].source.path.endsWith('bad.json'));
+  Assert.ok(ids().includes('codex:folder-a') && ids().includes('codex:folder-b'), 'the other files keep working');
+
+  Fs.writeFileSync(Path.join(folder, 'b.json'), document('codex:folder-b', 'changed b'));
+  await waitFor(function() { return nameOf('codex:folder-b') === 'changed b'; }, 'b.json edit to show up');
+
+  Fs.unlinkSync(Path.join(folder, 'a.json'));
+  await waitFor(function() { return !ids().includes('codex:folder-a'); }, 'a.json removal to show up');
+  Assert.equal(problems().length, 1, 'removing a file is not reported as a problem');
+
+  Fs.unlinkSync(Path.join(folder, 'bad.json'));
+  await waitFor(function() { return problems().length === 0; }, 'the broken file report to clear');
+  Assert.ok(ids().includes('codex:folder-b'));
+});
+
+Test('the supplement folder is ignored when it is not configured or turned off', async function(t)
+{
+  const home = tempHome(t);
+  const folder = Server.defaultSupplementDir(home);
+  Fs.mkdirSync(folder, { recursive: true });
+  Fs.writeFileSync(Path.join(folder, 'a.json'), JSON.stringify({ schemaVersion: 1, sessions: [{ id: 'codex:folder-a', name: 'a' }], relations: [] }));
+  for (const supplementDir of [undefined, null])
+  {
+    const app = Server.createObserverServer({ home: home, port: 0, pollIntervalMs: 50, supplements: [], supplementDir: supplementDir });
+    await new Promise(function(resolve, reject) { app.start(function(error) { return error ? reject(error) : resolve(); }); });
+    await new Promise(function(resolve) { setTimeout(resolve, 300); });
+    const loaded = app.snapshot().nodes.some(function(node) { return node.id === 'codex:folder-a'; });
+    await new Promise(function(resolve) { app.stop(resolve); });
+    Assert.equal(loaded, false, 'supplementDir=' + String(supplementDir) + ' must not read the folder');
+  }
+});
+
+Test('a file given with --supplement that also sits in the folder is loaded once', async function(t)
+{
+  const home = tempHome(t);
+  const folder = Server.defaultSupplementDir(home);
+  Fs.mkdirSync(folder, { recursive: true });
+  const file = Path.join(folder, 'a.json');
+  Fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: [{ id: 'codex:folder-a', name: 'a' }], relations: [] }));
+  const app = Server.createObserverServer({ home: home, port: 0, pollIntervalMs: 50, supplements: [file], supplementDir: folder });
+  t.after(function() { return new Promise(function(resolve) { app.stop(resolve); }); });
+  await new Promise(function(resolve, reject) { app.start(function(error) { return error ? reject(error) : resolve(); }); });
+  await waitFor(function() { return app.snapshot().nodes.some(function(node) { return node.id === 'codex:folder-a'; }); }, 'the file to load');
+  await new Promise(function(resolve) { setTimeout(resolve, 300); });
+  Assert.equal(app.snapshot().nodes.filter(function(node) { return node.id === 'codex:folder-a'; }).length, 1);
+  Assert.equal(app.snapshot().diagnostics.filter(function(item) { return item.code === 'supplement-invalid'; }).length, 0);
+});
+
+Test('a read that finishes after its file left the supplement folder leaves no stale problem behind', async function(t)
+{
+  const original = Supplement.loadSupplement;
+  t.after(function() { Supplement.loadSupplement = original; });
+  var slow = false;
+  Supplement.loadSupplement = function(path, callback)
+  {
+    if (!slow) return original(path, callback);
+    // A re-read that is still in flight when the file is removed, and then reports "no such file".
+    setTimeout(function() { callback(Object.assign(new Error('no such file'), { code: 'ENOENT' })); }, 400);
+  };
+  const home = tempHome(t);
+  const folder = Server.defaultSupplementDir(home);
+  Fs.mkdirSync(folder, { recursive: true });
+  const file = Path.join(folder, 'a.json');
+  Fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: [{ id: 'codex:folder-a', name: 'a' }], relations: [] }));
+  const app = Server.createObserverServer({ home: home, port: 0, pollIntervalMs: 50, supplements: [], supplementDir: folder });
+  t.after(function() { return new Promise(function(resolve) { app.stop(resolve); }); });
+  await new Promise(function(resolve, reject) { app.start(function(error) { return error ? reject(error) : resolve(); }); });
+  await waitFor(function() { return app.snapshot().nodes.some(function(node) { return node.id === 'codex:folder-a'; }); }, 'the file to load');
+  slow = true;
+  Fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, sessions: [{ id: 'codex:folder-a', name: 'edited' }], relations: [] }));
+  await new Promise(function(resolve) { setTimeout(resolve, 150); });
+  Fs.unlinkSync(file);
+  await waitFor(function() { return !app.snapshot().nodes.some(function(node) { return node.id === 'codex:folder-a'; }); }, 'the removal to show up');
+  await new Promise(function(resolve) { setTimeout(resolve, 700); });
+  Assert.equal(app.snapshot().diagnostics.filter(function(item) { return item.code === 'supplement-invalid'; }).length, 0);
+});

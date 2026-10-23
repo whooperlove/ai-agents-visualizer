@@ -62,8 +62,8 @@ node server.js --port 4318 --supplement examples/demo.json
 | Option | Meaning |
 | --- | --- |
 | `--port` | Port to listen on (default `4317`) |
-| `--supplement <file>` | Supplement JSON file; may be given several times. By default none is loaded |
-| `--no-supplement` | Use only auto-collected data |
+| `--supplement <file>` | An additional supplement JSON file from anywhere; may be given several times. Files in the [supplement folder](#where-supplement-files-go) are always loaded as well |
+| `--no-supplement` | Ignore the supplement folder and use only auto-collected data |
 | `--home <dir>` | Home directory to observe (default: your home directory) |
 | `--poll-ms <ms>` | Re-scan interval (default `2500`, minimum `250`) |
 | `--lang <en\|ko>` | Language of terminal and HTTP error messages (see [Language](#language)) |
@@ -163,7 +163,7 @@ The tool reads these locations under the home directory. Anything that does not 
 | Account assignment | Only the session ID → profile name map in `~/.config/claude-multi-accounts/claude-accounts.json`, if present |
 | Codex | Rollout files under `~/.codex/sessions` and `~/.codex/session_index.jsonl` |
 | Collaboration | `~/.cross-agent/registry.json`, `~/.cross-agent/deliveries` and `in-flight`, written by a local cross-agent message bridge, if you use one |
-| Supplement | Explicit JSON files passed with `--supplement` |
+| Supplement | `~/.config/ai-agents-visualizer/supplements/*.json` (see [Where supplement files go](#where-supplement-files-go)) and any files passed with `--supplement` |
 
 Claude grandchildren use `parentAgentId` and `spawnDepth`; Codex uses `session_meta.parent_thread_id` and `source.subagent.thread_spawn`. A deep agent whose parent was not recorded is shown with an unresolved parent. When the same physical file is visible through several account paths, it is read once and all of its sources are kept. The real account is never guessed from the observed path alone.
 
@@ -172,6 +172,24 @@ The initial read of a large JSONL file uses the first 256 KiB and the last 128 K
 Nothing is written to the sources. The server binds to `127.0.0.1` only and rejects foreign Origin / Host headers and write methods. The UI and API expose only allow-listed names, IDs, timestamps, models, statuses, tool names, short metadata descriptions and sources. Prompts, tool inputs and outputs, bridge message bodies and summary text are never exposed. The automatic collectors never send bridge messages or register hooks.
 
 ## Supplement JSON
+
+A supplement file describes what the session records cannot show on their own, for example which session coordinates which, or a retired session. It is plain JSON checked against a schema.
+
+### Where supplement files go
+
+Put them in the supplement folder and the server loads them automatically:
+
+```text
+~/.config/ai-agents-visualizer/supplements/*.json
+```
+
+- Every `*.json` file in the folder is loaded when the server starts. The folder is checked again at every re-scan, so you can add, edit or delete files while the server runs and the page follows. Files whose names start with a dot are ignored.
+- The folder lives under the observed home directory, so `--home <dir>` moves it to `<dir>/.config/ai-agents-visualizer/supplements`.
+- A missing folder is fine. A file that fails validation is reported as its own diagnostic and does not affect the other files.
+- Because the folder is outside any repository, a private session map kept there cannot be committed by accident, and the launcher scripts (`bin/launch.sh`, `bin/launch-browser.sh`) pick it up without extra options.
+- `--supplement <file>` loads a file from anywhere else in addition; `--no-supplement` ignores the folder.
+
+### Format
 
 Schema: [`schema/supplement.schema.json`](schema/supplement.schema.json)
 

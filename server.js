@@ -21,16 +21,24 @@ STATIC_FILES['/assets/office-characters.png'] = ['assets/office-characters.png',
   STATIC_FILES['/' + file] = [file, 'text/javascript; charset=utf-8'];
 });
 
+// Supplement files placed here are loaded automatically. The folder follows the usual per-user config
+// location (~/.config/<app>) under the observed home directory, so --home moves it along.
+function defaultSupplementDir(home)
+{
+  return Path.join(home, '.config', 'ai-agents-visualizer', 'supplements');
+}
+
 function parseOptions(args)
 {
   const options = { port: 4317, home: Os.homedir(), pollIntervalMs: 2500, supplements: [] };
   var customSupplement = false;
+  var useSupplementDir = true;
   // The first option problem is reported after the loop so that a later --lang still decides its language.
   var failure = null;
   for (var index = 0; index < args.length; index++)
   {
     const arg = args[index];
-    if (arg === '--no-supplement') { options.supplements = []; customSupplement = true; continue; }
+    if (arg === '--no-supplement') { options.supplements = []; customSupplement = true; useSupplementDir = false; continue; }
     if (arg === '--help') { options.help = true; continue; }
     if (!['--port', '--home', '--poll-ms', '--supplement', '--lang'].includes(arg) || !args[index + 1])
     {
@@ -57,6 +65,7 @@ function parseOptions(args)
   if (failure) throw new Error(failure());
   if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error(I18n.t('cli.server.portInvalid'));
   if (!Number.isInteger(options.pollIntervalMs) || options.pollIntervalMs < 250) throw new Error(I18n.t('cli.server.pollMsInvalid'));
+  options.supplementDir = useSupplementDir ? defaultSupplementDir(options.home) : null;
   return options;
 }
 
@@ -95,6 +104,12 @@ function createObserverServer(options)
   const clients = new Set();
   const supplementDic = new Map();
   const supplementErrors = new Map();
+  // Files found in options.supplementDir (when set); they come and go with the folder contents.
+  const folderSupplements = new Set();
+  const explicitSupplements = new Set(options.supplements || []);
+  // Paths whose read results still count: a read that finishes after its file left the folder is dropped.
+  const activeSupplements = new Set();
+  var folderTimer = null;
   const collectors = [Sessions.createSessionCollector(options, scheduleRefresh), Bridge.createBridgeCollector(options, scheduleRefresh)];
   var version = 0;
   var pending = collectors.length;
@@ -145,11 +160,13 @@ function createObserverServer(options)
   {
     Supplement.loadSupplement(path, function(error, document)
     {
-      if (stopped) return;
+      if (stopped || !activeSupplements.has(path)) return;
       if (error)
       {
         if (error.code === 'ENOENT') supplementDic.delete(path);
-        supplementErrors.set(path, supplementErrorMessage(error));
+        // A file that was removed from the supplement folder is a deliberate change, not a problem.
+        if (error.code === 'ENOENT' && folderSupplements.has(path)) supplementErrors.delete(path);
+        else supplementErrors.set(path, supplementErrorMessage(error));
       }
       else
       {
@@ -157,6 +174,57 @@ function createObserverServer(options)
         supplementErrors.delete(path);
       }
       scheduleRefresh();
+    });
+  }
+
+  function watchSupplement(path)
+  {
+    activeSupplements.add(path);
+    readSupplement(path);
+    Fs.watchFile(path, { interval: options.pollIntervalMs, persistent: false }, function(currentStat, previous)
+    {
+      if (currentStat.mtimeMs !== previous.mtimeMs || currentStat.size !== previous.size || currentStat.ino !== previous.ino) readSupplement(path);
+    });
+  }
+
+  function scanSupplementDir()
+  {
+    const directory = options.supplementDir;
+    if (stopped || typeof directory !== 'string') return;
+    Fs.readdir(directory, function(error, names)
+    {
+      if (stopped) return;
+      const found = new Set();
+      if (error)
+      {
+        // A missing folder just means there is nothing to load.
+        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') supplementErrors.set(directory, supplementErrorMessage(error));
+      }
+      else
+      {
+        supplementErrors.delete(directory);
+        names.filter(function(name) { return /\.json$/i.test(name) && name.charAt(0) !== '.'; }).sort().forEach(function(name)
+        {
+          const path = Path.join(directory, name);
+          if (!explicitSupplements.has(path)) found.add(path);
+        });
+      }
+      found.forEach(function(path)
+      {
+        if (folderSupplements.has(path)) return;
+        folderSupplements.add(path);
+        watchSupplement(path);
+      });
+      Array.from(folderSupplements).forEach(function(path)
+      {
+        if (found.has(path)) return;
+        folderSupplements.delete(path);
+        activeSupplements.delete(path);
+        Fs.unwatchFile(path);
+        supplementDic.delete(path);
+        supplementErrors.delete(path);
+        scheduleRefresh();
+      });
     });
   }
 
@@ -230,14 +298,10 @@ function createObserverServer(options)
   {
     server.listen(options.port, '127.0.0.1', function()
     {
-      (options.supplements || []).forEach(function(path)
-      {
-        readSupplement(path);
-        Fs.watchFile(path, { interval: options.pollIntervalMs, persistent: false }, function(currentStat, previous)
-        {
-          if (currentStat.mtimeMs !== previous.mtimeMs || currentStat.size !== previous.size || currentStat.ino !== previous.ino) readSupplement(path);
-        });
-      });
+      (options.supplements || []).forEach(watchSupplement);
+      scanSupplementDir();
+      folderTimer = setInterval(scanSupplementDir, options.pollIntervalMs);
+      folderTimer.unref();
       collectors.forEach(function(collector)
       {
         collector.start(function() { pending--; scheduleRefresh(); });
@@ -253,7 +317,9 @@ function createObserverServer(options)
     clearInterval(heartbeat);
     clearInterval(recencyTimer);
     collectors.forEach(function(collector) { collector.stop(); });
+    clearInterval(folderTimer);
     (options.supplements || []).forEach(function(path) { Fs.unwatchFile(path); });
+    folderSupplements.forEach(function(path) { Fs.unwatchFile(path); });
     clients.forEach(function(response) { response.end(); });
     server.close(callback);
     server.closeIdleConnections();
@@ -285,4 +351,4 @@ if (require.main === module)
   }
 }
 
-module.exports = { parseOptions: parseOptions, createObserverServer: createObserverServer };
+module.exports = { parseOptions: parseOptions, createObserverServer: createObserverServer, defaultSupplementDir: defaultSupplementDir };
