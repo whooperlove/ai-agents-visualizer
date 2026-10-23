@@ -25,7 +25,9 @@ var WasOfficeScene = null;
   var PARTNER_AGE_STEP = 1000;
   var ANCHOR_TOP = 2.74;
   var SHADOW_SIZE = 2048;
-  var LIGHT = { direction: [-0.3, 0.9, 0.78], color: [2.1, 1.84, 1.5], sky: [0.34, 0.38, 0.52], ground: [0.3, 0.23, 0.18],
+  /* Frames per second the characters are posed at, like stop-motion clay. 0 keeps the motion smooth. */
+  var STOP_MOTION_FPS = 0;
+  var LIGHT = { direction: [-0.3, 0.9, 0.78], color: [2.1, 1.84, 1.5], sky: [0.42, 0.35, 0.36], ground: [0.34, 0.25, 0.18],
     lamp: [1, 0.66, 0.36], exposure: 1.0 };
 
   var VERTEX_SOURCE = [
@@ -37,20 +39,37 @@ var WasOfficeScene = null;
     'uniform vec3 uInner;',
     'uniform vec3 uRadius;',
     'uniform float uShadowOffset;',
+    'uniform float uTaper;',
+    'uniform float uWobble;',
     'varying vec3 vNormal;',
     'varying vec3 vWorld;',
     'varying vec3 vDirection;',
     'varying vec3 vLocal;',
     'varying vec4 vShadow;',
     'varying vec3 vExtent;',
+    'varying vec3 vAxis;',
+    /* Hand-made irregularity: a few slow lumps along the surface, tied to the part, never to where it stands. */
+    'float wobble(vec3 local) {',
+    '  float lump = sin(local.x * 9.0 + uRadius.x * 31.0) * sin(local.y * 7.0 + uRadius.y * 23.0) + sin(local.z * 8.0 + local.y * 3.0 + uRadius.z * 17.0);',
+    '  return lump * uWobble * min(0.01, 0.15 * min(uRadius.x, min(uRadius.y, uRadius.z)));',
+    '}',
     'void main() {',
     '  vec3 local = aCorner * uInner + aDirection * uRadius;',
-    '  vExtent = uInner + uRadius;',
+    '  vec3 extent = uInner + uRadius;',
+    '  vExtent = extent;',
+    '  vec3 normal = aDirection / max(uRadius, vec3(0.0004));',
+    '  float slope = uTaper / max(extent.y, 0.0004);',
+    '  float lean = 1.0 + slope * local.y;',
+    '  normal = vec3(normal.x, normal.y * lean - slope * (local.x * normal.x + local.z * normal.z), normal.z);',
+    '  local.xz *= lean;',
+    '  local += aDirection * wobble(local);',
     '  vec4 world = uModel * vec4(local, 1.0);',
-    '  vNormal = (uModel * vec4(aDirection / max(uRadius, vec3(0.0004)), 0.0)).xyz;',
+    '  vNormal = (uModel * vec4(normal, 0.0)).xyz;',
     '  vWorld = world.xyz;',
     '  vDirection = aDirection;',
     '  vLocal = local;',
+    '  vec3 longest = (extent.x > extent.y && extent.x > extent.z) ? vec3(1.0, 0.0, 0.0) : (extent.z > extent.y && extent.z > extent.x) ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);',
+    '  vAxis = (uModel * vec4(longest, 0.0)).xyz;',
     '  vShadow = uLightMatrix * (world + vec4(normalize(vNormal) * uShadowOffset, 0.0));',
     '  gl_Position = uProjection * world;',
     '}'].join('\n');
@@ -62,8 +81,18 @@ var WasOfficeScene = null;
     'uniform mat4 uLightMatrix;',
     'uniform vec3 uInner;',
     'uniform vec3 uRadius;',
+    'uniform float uTaper;',
+    'uniform float uWobble;',
+    /* Hand-made irregularity: a few slow lumps along the surface, tied to the part, never to where it stands. */
+    'float wobble(vec3 local) {',
+    '  float lump = sin(local.x * 9.0 + uRadius.x * 31.0) * sin(local.y * 7.0 + uRadius.y * 23.0) + sin(local.z * 8.0 + local.y * 3.0 + uRadius.z * 17.0);',
+    '  return lump * uWobble * min(0.01, 0.15 * min(uRadius.x, min(uRadius.y, uRadius.z)));',
+    '}',
     'void main() {',
-    '  gl_Position = uLightMatrix * (uModel * vec4(aCorner * uInner + aDirection * uRadius, 1.0));',
+    '  vec3 local = aCorner * uInner + aDirection * uRadius;',
+    '  local.xz *= 1.0 + uTaper * local.y / max(uInner.y + uRadius.y, 0.0004);',
+    '  local += aDirection * wobble(local);',
+    '  gl_Position = uLightMatrix * (uModel * vec4(local, 1.0));',
     '}'].join('\n');
 
   var PRECISION = '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n';
@@ -98,6 +127,7 @@ var WasOfficeScene = null;
     'varying vec3 vLocal;',
     'varying vec4 vShadow;',
     'varying vec3 vExtent;',
+    'varying vec3 vAxis;',
     'float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }',
     'float noise(vec2 p) {',
     '  vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);',
@@ -108,7 +138,10 @@ var WasOfficeScene = null;
     'vec3 display(vec3 c) {',
     '  c *= uFrame.z;',
     '  c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);',
-    '  return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));',
+    '  c = pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));',
+    '  float luma = dot(c, vec3(0.299, 0.587, 0.114));',
+    '  c = mix(vec3(luma), c, 0.84) * vec3(1.035, 1.0, 0.95);',
+    '  return c * 0.93 + vec3(0.045, 0.032, 0.036);',
     '}',
     'float shadowAt(vec3 n) {',
     '  if (uFrame.w < 0.5) return 1.0;',
@@ -134,14 +167,18 @@ var WasOfficeScene = null;
     '    float e = length(q);',
     '    float inside = cover(e - 1.0, aa / r.x);',
     '    float t = clamp(q.y * 0.5 + 0.5, 0.0, 1.0);',
+    '    vec2 ic = c + vec2(uPaint2.w * 0.04, 0.0);',
+    '    vec2 ri = vec2(0.1, r.y);',
+    '    float irisArea = cover(length((p - ic) / ri) - 1.0, aa / ri.x);',
+    '    vec3 white = vec3(0.86, 0.8, 0.77) * (1.0 - 0.3 * smoothstep(0.45, 1.0, t));',
     '    vec3 iris = mix(uColor2 * 2.2 + vec3(0.025), uColor2 * 0.3, smoothstep(0.05, 0.85, t));',
-    '    float pupil = cover(length((p - c - vec2(0.0, 0.012)) / (r * vec2(0.5, 0.56))) - 1.0, aa / (r.x * 0.5));',
+    '    float pupil = cover(length((p - ic - vec2(0.0, 0.012)) / (ri * vec2(0.5, 0.56))) - 1.0, aa / (ri.x * 0.5));',
     '    iris = mix(iris, vec3(0.01), pupil * 0.8);',
-    '    float h1 = cover(length((p - c - vec2(-0.32 * r.x, 0.34 * r.y)) / vec2(0.34 * r.x, 0.32 * r.x)) - 1.0, aa / (0.33 * r.x));',
-    '    float h2 = cover(length((p - c - vec2(0.36 * r.x, -0.46 * r.y)) / vec2(0.15 * r.x)) - 1.0, aa / (0.15 * r.x));',
+    '    float h1 = cover(length((p - ic - vec2(-0.32 * ri.x, 0.34 * ri.y)) / vec2(0.34 * ri.x, 0.32 * ri.x)) - 1.0, aa / (0.33 * ri.x));',
+    '    float h2 = cover(length((p - ic - vec2(0.36 * ri.x, -0.46 * ri.y)) / vec2(0.15 * ri.x)) - 1.0, aa / (0.15 * ri.x));',
     '    iris = mix(iris, vec3(1.0), h1);',
     '    iris = mix(iris, vec3(0.95), h2 * 0.8);',
-    '    col = mix(col, iris, inside);',
+    '    col = mix(col, mix(white, iris, irisArea), inside);',
     '    shine = max(shine, inside);',
     '    float lash = cover(abs(e - 1.03) - 0.075, aa / r.x) * smoothstep(-0.05, 0.5, q.y);',
     '    vec2 flick = p - c - vec2(side * r.x * 0.92, r.y * 0.62);',
@@ -162,6 +199,9 @@ var WasOfficeScene = null;
     '  float mouth = uPaint.z;',
     '  vec2 m = p - vec2(0.0, -0.3);',
     '  vec3 ink = vec3(0.32, 0.11, 0.1);',
+    '  float closed = (mouth < 0.5 || (mouth > 1.98 && mouth < 2.5) || mouth > 3.5) ? 1.0 : 0.0;',
+    '  float lips = 1.0 - smoothstep(0.35, 1.0, length((m - vec2(0.0, -0.012)) / vec2(0.085, 0.034)));',
+    '  col = mix(col, col * vec3(1.0, 0.8, 0.78) + vec3(0.02, 0.0, 0.0), lips * closed * 0.55);',
     '  if (mouth < 0.5) {',
     '    float curve = m.y - (3.4 * m.x * m.x - 0.014);',
     '    col = mix(col, ink, cover(max(abs(curve) - 0.012, abs(m.x) - 0.075), aa));',
@@ -184,7 +224,6 @@ var WasOfficeScene = null;
     'vec3 paintFace(vec3 skin, vec3 d, float aa, inout float shine) {',
     '  vec2 p = sphereCoord(d);',
     '  vec3 col = skin;',
-    '  float gaze = uPaint2.w;',
     '  for (int i = 0; i < 2; i++) {',
     '    float side = i == 0 ? -1.0 : 1.0;',
     '    float blush = length((p - vec2(side * 0.52, -0.23)) / vec2(0.12, 0.065));',
@@ -193,10 +232,23 @@ var WasOfficeScene = null;
     '    float line = 0.012 - 2.4 * b.x * b.x - side * uPaint2.z * 0.32 * b.x;',
     '    col = mix(col, uColor3, cover(max(abs(b.y - line) - 0.0115, abs(b.x) - 0.072), aa));',
     '  }',
+    '  if (uPaint2.x > 1.5) {',
+    '    for (int i = 0; i < 2; i++) {',
+    '      float side = i == 0 ? -1.0 : 1.0;',
+    '      vec2 home = p - vec2(side * 0.3, -0.16);',
+    '      vec2 f = home * vec2(46.0, 52.0);',
+    '      vec2 cell = floor(f);',
+    '      vec2 jitter = vec2(hash(cell + 3.1), hash(cell + 8.7)) * 0.5 + 0.25;',
+    '      float spot = 1.0 - smoothstep(0.1, 0.2, length(fract(f) - jitter));',
+    '      float zone = 1.0 - smoothstep(0.5, 1.0, length(home / vec2(0.2, 0.075)));',
+    '      col = mix(col, col * vec3(0.8, 0.6, 0.52), spot * zone * step(0.45, hash(cell + side * 5.0)) * 0.8);',
+    '    }',
+    '  }',
     '  col *= 1.0 - 0.1 * (1.0 - smoothstep(0.25, 1.0, length((p - vec2(0.0, -0.15)) / vec2(0.032, 0.022))));',
-    '  col = paintEye(col, p, vec2(-0.34 + gaze * 0.05, -0.06), -1.0, aa, shine);',
-    '  col = paintEye(col, p, vec2(0.34 + gaze * 0.05, -0.06), 1.0, aa, shine);',
-    '  if (uPaint2.x > 0.5) {',
+    '  shine = max(shine, 0.55 * (1.0 - smoothstep(0.2, 1.0, length((p - vec2(0.0, -0.118)) / vec2(0.045, 0.028)))));',
+    '  col = paintEye(col, p, vec2(-0.34, -0.06), -1.0, aa, shine);',
+    '  col = paintEye(col, p, vec2(0.34, -0.06), 1.0, aa, shine);',
+    '  if (mod(uPaint2.x, 2.0) > 0.5) {',
     '    float frame = cover(max(abs(p.y + 0.035) - 0.011, abs(p.x) - 0.135), aa);',
     '    for (int i = 0; i < 2; i++) {',
     '      float side = i == 0 ? -1.0 : 1.0;',
@@ -344,7 +396,7 @@ var WasOfficeScene = null;
     '  col = mix(col, uColor3 * 0.7, cover(uv.y + 0.62 - 0.12 * sin(uv.x * 5.0 + seed * 2.0), 0.02));',
     '  return col;',
     '}',
-    'vec3 lighting(vec3 albedo, vec3 n, float gloss, float rim, float sss, float ao, float sheen) {',
+    'vec3 lighting(vec3 albedo, vec3 n, float gloss, float rim, float sss, float ao) {',
     '  float ndl = dot(n, uLightDirection);',
     '  float wrap = 0.2 + 0.25 * sss;',
     '  float diffuse = clamp((ndl + wrap) / (1.0 + wrap), 0.0, 1.0);',
@@ -367,8 +419,71 @@ var WasOfficeScene = null;
     '  }',
     '  vec3 h = normalize(uLightDirection + uViewDirection);',
     '  float spec = pow(max(dot(n, h), 0.0), 8.0 + gloss * 110.0) * gloss * (0.25 + 0.75 * shadow);',
-    '  color += uLightColor * spec * 0.4 + uLightColor * sheen * 0.07 * (0.4 + 0.6 * shadow);',
+    '  color += uLightColor * spec * 0.4;',
     '  return color + uSkyColor * fres * rim * 0.9;',
+    '}',
+    /* Strand noise on a sphere: x is clumps of strands, y is single strands. Periodic around the axis, so no seam. */
+    'vec2 strands(vec2 p, float density) {',
+    '  vec2 ring = vec2(cos(p.x), sin(p.x));',
+    '  float clump = noise(ring * 4.5 + vec2(p.y * 2.6, 7.0));',
+    '  float wobble = noise(ring * 9.0 + vec2(p.y * 5.0, 21.0));',
+    '  float line = sin(p.x * density + clump * 14.0 + wobble * 6.0);',
+    '  float second = sin(p.x * density * 0.5 + wobble * 9.0 + p.y * 3.0);',
+    '  return vec2(clump, 0.5 + 0.28 * line + 0.22 * second);',
+    '}',
+    /* A lock runs along its longest axis; this turns that axis into the pole the strands radiate from. */
+    'vec3 strandFrame(vec3 d) {',
+    '  if (vExtent.x > vExtent.y && vExtent.x > vExtent.z) return d.yxz;',
+    '  if (vExtent.z > vExtent.y && vExtent.z > vExtent.x) return d.xzy;',
+    '  return d;',
+    '}',
+    /* Two-lobe anisotropic hair highlight: a sharp band plus a broad tinted one, both across the strand direction. */
+    'vec3 hairGloss(vec3 albedo, vec3 n, vec3 axis, vec2 s) {',
+    '  vec3 tangent = normalize(axis) - n * dot(normalize(axis), n);',
+    '  float span = length(tangent);',
+    '  tangent = span > 0.001 ? tangent / span : vec3(1.0, 0.0, 0.0);',
+    '  vec3 halfway = normalize(uLightDirection + uViewDirection);',
+    '  float sharp = dot(normalize(tangent + n * 0.08), halfway);',
+    '  float broad = dot(normalize(tangent - n * 0.3), halfway);',
+    '  float lit = clamp(dot(n, uLightDirection) * 2.0 + 0.4, 0.0, 1.0);',
+    '  vec3 lobes = pow(sqrt(max(1.0 - sharp * sharp, 0.0)), 140.0) * 0.26 * vec3(1.0)',
+    '    + pow(sqrt(max(1.0 - broad * broad, 0.0)), 28.0) * 0.16 * (albedo * 3.0 + 0.1);',
+    '  return lobes * (0.35 + 0.65 * s.y * (0.6 + 0.8 * s.x)) * lit;',
+    '}',
+    /* Shoe: toe-cap seam, darker toe cap and lace rows across the instep. The box is axis aligned, toe at +z. */
+    'vec3 paintShoe(vec3 base, vec3 d) {',
+    '  float z = vLocal.z / max(vExtent.z, 0.001);',
+    '  float x = vLocal.x / max(vExtent.x, 0.001);',
+    '  vec3 col = base * mix(1.0, 0.9, smoothstep(0.42, 0.5, z));',
+    '  col *= 1.0 - 0.28 * (1.0 - smoothstep(0.0, 0.035, abs(z - 0.46))) * step(-0.3, d.y);',
+    '  float rung = abs(fract((z + 0.3) * 4.0) - 0.5);',
+    '  float lace = (1.0 - smoothstep(0.07, 0.15, rung)) * step(-0.3, z) * step(z, 0.42);',
+    '  lace *= (1.0 - smoothstep(0.55, 0.85, abs(x))) * smoothstep(0.35, 0.7, d.y);',
+    '  vec3 tape = dot(base, vec3(0.2126, 0.7152, 0.0722)) > 0.35 ? base * 0.78 : vec3(0.7);',
+    '  return mix(col, tape, lace * 0.85);',
+    '}',
+    /* Woven or knitted cloth on a part, in part space so it stays with the garment. The pattern fades out once its
+       period gets close to a pixel. kind: 1 knit ribs, 2 fleece, 3 twill or denim, 4 plain cotton. */
+    'vec3 paintFabric(vec3 base, float kind) {',
+    '  vec3 p = vLocal;',
+    '  float tone = 1.0;',
+    '  float period = 0.07;',
+    '  if (kind < 1.5) {',
+    '    tone = 0.9 + 0.1 * (0.5 + 0.5 * sin((p.x + p.z) * 90.0)) + 0.05 * noise(p.xy * 60.0 + p.z * 60.0);',
+    '  } else if (kind < 2.5) {',
+    '    period = 0.05;',
+    '    tone = 0.95 + 0.08 * noise(p.xy * 80.0 + p.zy * 80.0);',
+    '  } else if (kind < 3.5) {',
+    '    period = 0.04;',
+    '    tone = 0.97 + 0.03 * sin((p.x + p.y) * 150.0);',
+    '  } else {',
+    '    period = 0.04;',
+    '    tone = 0.985 + 0.03 * noise(p.xz * 100.0 + p.y * 100.0);',
+    '  }',
+    '  tone = mix(1.0, tone, smoothstep(2.0, 4.0, period / max(uFrame.x, 0.0001)));',
+    '  float limb = step(2.0, vExtent.y / max(max(vExtent.x, vExtent.z), 0.001));',
+    '  float crease = smoothstep(0.8, 1.0, abs(vLocal.y) / max(vExtent.y, 0.001));',
+    '  return base * tone * (1.0 - 0.1 * limb * crease);',
     '}',
     'void main() {',
     '  float facing = gl_FrontFacing ? 1.0 : -1.0;',
@@ -378,19 +493,35 @@ var WasOfficeScene = null;
     '  float alpha = uColor.a;',
     '  float ao = mix(0.6, 1.0, smoothstep(0.0, 0.5, vWorld.y));',
     '  float shine = 0.0;',
-    '  float sheen = 0.0;',
+    '  vec3 hairSpec = vec3(0.0);',
+    '  float gloss = uMaterial.x;',
+    '  float rimAmount = uMaterial.z;',
     '  float mode = uPaint.x;',
     '  if (mode > 0.5 && mode < 1.5) {',
     '    albedo = paintFace(albedo, d, uFrame.x, shine);',
-    '  } else if (mode > 1.5 && mode < 2.5) {',
+    '  } else if ((mode > 1.5 && mode < 2.5) || (mode > 16.5 && mode < 19.5)) {',
     '    float keep = hairKeep(d);',
-    '    alpha = smoothstep(-uFrame.x, uFrame.x, keep);',
-    '    if (alpha < 0.02) discard;',
-    '    vec2 p = sphereCoord(d);',
-    '    float strands = 0.5 + 0.5 * sin(p.x * 30.0 + sin(p.y * 8.0 + p.x * 3.0) * 1.6);',
-    '    albedo *= (0.9 + 0.1 * strands) * mix(0.72, 1.0, smoothstep(0.0, 0.12, keep));',
-    '    float band = (p.y - 0.62 - 0.03 * sin(p.x * 12.0)) / 0.08;',
-    '    sheen = exp(-band * band) * (1.0 - smoothstep(0.4, 1.4, abs(p.x))) * (0.5 + 0.5 * strands);',
+    '    if (mode > 18.5) {',
+    '      vec2 q = sphereCoord(d);',
+    '      keep = min(keep, mix(uPaint2.y, uPaint.w, smoothstep(1.2, 2.7, abs(q.x))) + uPaint2.w - q.y);',
+    '    }',
+    '    float dither = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));',
+    '    float cut = smoothstep(-uFrame.x, uFrame.x, keep);',
+    '    alpha = clamp(cut + (dither - 0.5) * 1.4 * cut * (1.0 - cut), 0.0, 1.0);',
+    '    if (cut < 0.02 || alpha < 0.02) discard;',
+    '    if (mode > 16.5) {',
+    '      vec2 q = sphereCoord(d);',
+    '      albedo = paintFabric(albedo, mode > 17.5 ? 1.0 : 4.0) * mix(0.72, 1.0, smoothstep(0.0, 0.1, keep));',
+    '      if (mode < 17.5) albedo *= 1.0 - 0.16 * (1.0 - smoothstep(0.0, 0.05, abs(sin(q.x * 3.0)) * cos(q.y)));',
+    '      gloss = 0.04;',
+    '      rimAmount = 0.2;',
+    '    } else {',
+    '      vec2 s = strands(sphereCoord(d), 20.0);',
+    '      albedo *= (0.9 + 0.1 * s.y) * (0.82 + 0.36 * s.x) * mix(0.6, 1.0, smoothstep(0.0, 0.14, keep));',
+    '      hairSpec = hairGloss(albedo, n, vec3(0.0, 1.0, 0.0), s);',
+    '      gloss = 0.03;',
+    '      rimAmount = 0.12;',
+    '    }',
     '    if (facing < 0.0) albedo *= 0.45;',
     '  } else if (mode > 2.5 && mode < 3.5) {',
     '    albedo = paintFloor(albedo, ao);',
@@ -415,12 +546,34 @@ var WasOfficeScene = null;
     '    albedo = paintArt();',
     '  } else if (mode > 11.5 && mode < 12.5) {',
     '    albedo *= (0.82 + 0.3 * (d.z * 0.5 + 0.5)) * (1.0 - 0.2 * (1.0 - smoothstep(0.0, 0.08, abs(d.x))));',
+    '  } else if (mode > 12.5 && mode < 13.5) {',
+    '    vec2 s = strands(sphereCoord(strandFrame(d)), 14.0);',
+    '    albedo *= (0.88 + 0.12 * s.y) * (0.84 + 0.32 * s.x) * mix(0.82, 1.0, smoothstep(-0.9, 0.3, d.y));',
+    '    hairSpec = hairGloss(albedo, n, vAxis, s);',
+    '    gloss = 0.03;',
+    '    rimAmount = 0.12;',
+    '  } else if (mode > 13.5 && mode < 14.5) {',
+    '    albedo = mix(albedo, albedo * vec3(0.86, 0.6, 0.56), 0.8 * smoothstep(0.5, 0.92, d.x * uPaint.y));',
+    '  } else if (mode > 14.5 && mode < 15.5) {',
+    '    albedo = paintShoe(albedo, d);',
+    '  } else if (mode > 15.5 && mode < 16.5) {',
+    '    albedo = paintFabric(albedo, uPaint.y);',
     '  }',
     '  if (uMaterial.y > 0.99) {',
     '    gl_FragColor = vec4(display(albedo), alpha);',
     '    return;',
     '  }',
-    '  vec3 color = lighting(albedo, n, uMaterial.x + shine * 0.75, uMaterial.z, uMaterial.w, ao, sheen) + albedo * uMaterial.y;',
+    /* Clay: thumb-sized dents plus finer tool marks, a little pigment mottling, matte with a soft warm sheen. */
+    '  vec3 fine = vLocal * 11.0;',
+    '  vec3 broad = vLocal * 4.0;',
+    '  vec3 dent = vec3(noise(fine.xy + fine.z), noise(fine.yz - fine.x + 7.0), noise(fine.zx + fine.y + 13.0)) - 0.5;',
+    '  vec3 thumb = vec3(noise(broad.xy + broad.z + 3.0), noise(broad.yz - broad.x + 11.0), noise(broad.zx + broad.y + 19.0)) - 0.5;',
+    '  float reachFine = smoothstep(2.5, 5.0, 0.09 / max(uFrame.x, 0.0001));',
+    '  float reachBroad = smoothstep(2.5, 5.0, 0.25 / max(uFrame.x, 0.0001));',
+    '  float soft = (mode > 0.5 && mode < 1.5) ? 0.3 : 1.0;',
+    '  n = normalize(n + (dent * reachFine * 0.28 + thumb * reachBroad * 0.5) * soft);',
+    '  albedo *= 0.96 + 0.08 * noise(fine.xy * 0.6 + fine.z * 0.4);',
+    '  vec3 color = lighting(albedo, n, gloss * 0.4 + shine * 0.75, rimAmount * 0.6, uMaterial.w + 0.08, ao) + albedo * uMaterial.y + uLightColor * hairSpec * 0.5;',
     '  gl_FragColor = vec4(display(color), alpha);',
     '}'].join('\n');
 
@@ -1006,8 +1159,8 @@ var WasOfficeScene = null;
         programs = {
           main: compileProgram(VERTEX_SOURCE, FRAGMENT_SOURCE.replace('#define LAMP_SLOTS 8', '#define LAMP_SLOTS ' + lampSlots), ['uModel', 'uProjection', 'uLightMatrix', 'uInner', 'uRadius', 'uShadowOffset', 'uColor', 'uMaterial', 'uPaint',
             'uPaint2', 'uColor2', 'uColor3', 'uFrame', 'uLightDirection', 'uLightColor', 'uSkyColor', 'uGroundColor', 'uViewDirection', 'uShadowInfo',
-            'uLamps[0]', 'uLampColors[0]', 'uShadowMap']),
-          depth: compileProgram(DEPTH_VERTEX_SOURCE, DEPTH_FRAGMENT_SOURCE, ['uModel', 'uLightMatrix', 'uInner', 'uRadius'])
+            'uLamps[0]', 'uLampColors[0]', 'uShadowMap', 'uTaper', 'uWobble']),
+          depth: compileProgram(DEPTH_VERTEX_SOURCE, DEPTH_FRAGMENT_SOURCE, ['uModel', 'uLightMatrix', 'uInner', 'uRadius', 'uTaper', 'uWobble'])
         };
         var vertices = [];
         var indices = [];
@@ -1049,7 +1202,7 @@ var WasOfficeScene = null;
       if (!item)
       {
         item = { model: new Float32Array(16), inner: new Float32Array(3), radius: new Float32Array(3), color: new Float32Array(4), material: new Float32Array(4),
-          paint: new Float32Array(4), paint2: new Float32Array(4), color2: new Float32Array(3), color3: new Float32Array(3), frame: new Float32Array(4) };
+          paint: new Float32Array(4), paint2: new Float32Array(4), color2: new Float32Array(3), color3: new Float32Array(3), frame: new Float32Array(4), taper: 0, wobble: 0 };
         items.push(item);
       }
       itemCount += 1;
@@ -1057,6 +1210,8 @@ var WasOfficeScene = null;
       partMatrix(part, rootTransform, item.model);
       item.inner.set(part.inner);
       item.radius.set(part.radius);
+      item.taper = part.taper || 0;
+      item.wobble = 0;
       var source = part.color;
       item.color[0] = Math.pow(source[0], 2.2);
       item.color[1] = Math.pow(source[1], 2.2);
@@ -1074,12 +1229,12 @@ var WasOfficeScene = null;
       item.color3[0] = Math.pow(third[0], 2.2); item.color3[1] = Math.pow(third[1], 2.2); item.color3[2] = Math.pow(third[2], 2.2);
       var pixel = 1 / Math.max(1, pixelsPerUnit());
       var mode = item.paint[0];
-      item.frame[0] = mode === 1 || mode === 2 ? pixel * 1.1 / Math.max(0.01, scale * part.radius[0]) : pixel;
+      item.frame[0] = mode === 1 || mode === 2 || (mode >= 17 && mode <= 19) ? pixel * 1.1 / Math.max(0.01, scale * part.radius[0]) : pixel;
       item.mesh = part.mesh || 'round';
       item.cast = part.cast !== false && part.blend !== 'alpha' && part.blend !== 'add' && part.emissive < 1 && mode !== 5;
       item.pass = part.blend === 'alpha' ? 1 : part.blend === 'add' ? 2 : 0;
       item.receive = typeof receive === 'boolean' ? receive : !rootTransform || rootTransform === ENV;
-      item.coverage = mode === 2;
+      item.coverage = mode === 2 || (mode >= 17 && mode <= 19);
       return item;
     }
 
@@ -1119,6 +1274,8 @@ var WasOfficeScene = null;
           gl.uniformMatrix4fv(programs.depth.uniforms.uModel, false, item.model);
           gl.uniform3fv(programs.depth.uniforms.uInner, item.inner);
           gl.uniform3fv(programs.depth.uniforms.uRadius, item.radius);
+          gl.uniform1f(programs.depth.uniforms.uTaper, item.taper);
+          gl.uniform1f(programs.depth.uniforms.uWobble, item.wobble);
           gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, mesh.offset);
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1135,7 +1292,7 @@ var WasOfficeScene = null;
       gl.uniform3fv(uniforms.uGroundColor, new Float32Array(LIGHT.ground));
       gl.uniform3fv(uniforms.uViewDirection, new Float32Array([0, Math.sin(PITCH), Math.cos(PITCH)]));
       gl.uniform4fv(uniforms.uShadowInfo, new Float32Array([shadowsOn ? 1.2 / shadow.size : 0, 0.0012, 0.66, 0]));
-      gl.uniform1f(uniforms.uShadowOffset, shadowsOn ? (halfWidth * 2 + 6) / shadow.size * 1.5 : 0);
+      gl.uniform1f(uniforms.uShadowOffset, shadowsOn ? (halfWidth * 2 + 6) / shadow.size * 3.0 : 0);
       floatScratch.lamps.fill(0);
       floatScratch.lampColors.fill(0);
       lamps.slice().sort(function (first, second) { return Math.abs(first.position[0] - cameraX) - Math.abs(second.position[0] - cameraX); }).slice(0, lampSlots).forEach(function (lamp, slot)
@@ -1178,6 +1335,8 @@ var WasOfficeScene = null;
           gl.uniformMatrix4fv(uniforms.uModel, false, item.model);
           gl.uniform3fv(uniforms.uInner, item.inner);
           gl.uniform3fv(uniforms.uRadius, item.radius);
+          gl.uniform1f(uniforms.uTaper, item.taper);
+          gl.uniform1f(uniforms.uWobble, item.wobble);
           gl.uniform4fv(uniforms.uColor, item.color);
           gl.uniform4fv(uniforms.uMaterial, item.material);
           gl.uniform4fv(uniforms.uPaint, item.paint);
@@ -1451,7 +1610,7 @@ var WasOfficeScene = null;
       var metal = hex('3a3f47');
       var parts = [
         shapes.box('chair-seat', P(0, 0.49, -0.02), [0.34, 0.045, 0.31], 0.045, color, { gloss: 0.2 }),
-        shapes.box('chair-back', P(0, 0.96, -0.4), [0.37, 0.3, 0.07], 0.07, color, { gloss: 0.18, sss: 0.1, rotation: { x: -0.12, y: 0, z: 0 } }),
+        shapes.box('chair-back', P(0, 0.82, -0.4), [0.37, 0.2, 0.07], 0.07, color, { gloss: 0.18, sss: 0.1, rotation: { x: -0.12, y: 0, z: 0 } }),
         shapes.capsule('chair-spine', P(0, 0.47, -0.27), P(0, 0.74, -0.4), 0.03, metal, { gloss: 0.5 }),
         shapes.cylinder('chair-post', P(0, 0.28, -0.02), 0.035, 0.17, metal, { gloss: 0.6 })
       ];
@@ -1633,10 +1792,11 @@ var WasOfficeScene = null;
       var activity = position.walking ? 'walk' : stance === 'sofa' ? status === 'completed' ? 'sleep' : 'relax' : turned ? 'turned'
         : status === 'running' ? 'typing' : status === 'waiting' ? 'waiting' : status === 'idle' ? 'idle' : status === 'error' ? 'error' : 'unknown';
       var animated = motionAllowed();
-      var seconds = timestamp / 1000;
+      var clock = STOP_MOTION_FPS > 0 ? Math.floor(timestamp / 1000 * STOP_MOTION_FPS) / STOP_MOTION_FPS * 1000 : timestamp;
+      var seconds = clock / 1000;
       var materials = palettes.get(actor.id);
-      var wave = turned && animated && timestamp - selectedAt < 1800 ? (timestamp - selectedAt) / 1800 : 0;
-      return { stance: stance, activity: activity, phone: call && call.phase, time: animated ? timestamp : 0, wave: wave,
+      var wave = turned && animated && clock - selectedAt < 1800 ? Math.max(0, clock - selectedAt) / 1800 : 0;
+      return { stance: stance, activity: activity, phone: call && call.phase, time: animated ? clock : 0, wave: wave,
         look: activity === 'typing' && animated ? Math.sin(seconds * 0.35 + (materials ? materials.phase : 0) * 6.28) : 0,
         accent: providerAccent(actor.provider), materials: materials };
     }
@@ -2118,7 +2278,7 @@ var WasOfficeScene = null;
         if (selectedId === id) blob(position.x, rootZ + 0.1, 0.95, 0.6, 0.55, providerAccent(actor.provider));
         else if (pose.stance !== 'desk') blob(position.x, rootZ + 0.3, 0.7, 0.45, 0.2);
         if (pose.stance === 'desk' && variant) chair(root, variant.chair);
-        WasCharacterModel.parts(actor.id, pose).forEach(function (part) { emit(part, root); });
+        WasCharacterModel.parts(actor.id, pose).forEach(function (part) { emit(part, root, true).wobble = 1; });
         if (call && call.phase === 'ringing' && motionAllowed())
         {
           var ring = phoneWorld(position, rootZ, yaw);

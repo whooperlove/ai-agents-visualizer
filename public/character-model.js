@@ -6,11 +6,18 @@ var WasCharacterModel = null;
   'use strict';
 
   var HEAD = [0.5, 0.465, 0.46];
+  var HEAD_TAPER = 0.1;
   var HAIR_STYLES = ['tousled', 'swept', 'bob', 'bun', 'curly', 'spiky', 'long', 'ponytail'];
   var OUTFITS = ['tee', 'hoodie', 'cardigan', 'shirt', 'sweater', 'overalls'];
-  var PAINT = { none: 0, face: 1, hair: 2, floor: 3, wall: 4, window: 5, screen: 6, rug: 7, blob: 8, glow: 9, art: 10, leaf: 12 };
+  var PAINT = { none: 0, face: 1, hair: 2, floor: 3, wall: 4, window: 5, screen: 6, rug: 7, blob: 8, glow: 9, art: 10, leaf: 12, strand: 13, ear: 14, shoe: 15, fabric: 16, cap: 17, beanie: 18, cuff: 19 };
   var MOUTH = { smile: 0, talk: 1, flat: 2, round: 3, frown: 4 };
   var EYES = { open: 0, happy: 1, closed: 2 };
+  var CLOTH = { knit: 1, fleece: 2, twill: 3, cotton: 4 };
+
+  function cloth(kind)
+  {
+    return { paint: [PAINT.fabric, kind, 0, 0] };
+  }
 
   function hashId(value)
   {
@@ -64,16 +71,22 @@ var WasCharacterModel = null;
     var trims = ['f1e9d8', 'e9e4da', 'f6d9a8', 'cfe0ea', 'f2c9c0', '333842'];
     var eyes = ['3b2a22', '1f1c22', '30435e', '4f3d2a', '2f4a3d'];
     var gear = ['2f3540', 'e8e4dc', 'd9604f', '4f7fd0', 'f0b04c'];
+    var hats = ['3f5a85', 'c86b56', 'efe3c8', '4c525c', '6d8b5a', 'e2b85c'];
     var accessory = look % 20 < 9 ? 'none' : look % 20 < 15 ? 'glasses' : 'headphones';
     var skin = color(skins[hash % skins.length]);
+    var freckles = hash % skins.length < 4 && (look >>> 22) % 4 === 0;
     var shirt = distinct(shirts, (hash >>> 7) % shirts.length, [skin]);
     var outfit = (look >>> 4) % OUTFITS.length;
     var bottoms = OUTFITS[outfit] === 'overalls' ? ['5a7bb0', '6f8a5c', 'b08f68', 'c0705c', '7a6ea8'] : pants;
-    return { skin: skin, hair: color(hairs[(hash >>> 3) % hairs.length]),
+    var hairColor = color(hairs[(hash >>> 3) % hairs.length]);
+    var hatRoll = (look >>> 26) % 9;
+    return { skin: skin, hair: hairColor,
       shirt: shirt, pants: distinct(bottoms, (hash >>> 12) % bottoms.length, [shirt, skin]),
       shoes: color(shoes[(hash >>> 17) % shoes.length]), hairStyle: (hash >>> 21) % HAIR_STYLES.length,
       outfit: outfit, trim: color(trims[(look >>> 9) % trims.length]),
-      eyes: color(eyes[(look >>> 13) % eyes.length]), accessory: accessory, gear: color(gear[(look >>> 17) % gear.length]),
+      eyes: color(eyes[(look >>> 13) % eyes.length]), accessory: accessory, gear: color(gear[(look >>> 17) % gear.length]), freckles: freckles,
+      hat: accessory === 'headphones' ? 'none' : hatRoll === 0 ? 'cap' : hatRoll === 1 ? 'beanie' : 'none',
+      hatColor: distinct(hats, (look >>> 6) % hats.length, [hairColor]), badge: (look >>> 2) % 4 === 0,
       phase: (look >>> 20) % 1000 / 1000 };
   }
 
@@ -180,7 +193,7 @@ var WasCharacterModel = null;
       inner: inner, radius: radius, color: material, gloss: typeof settings.gloss === 'number' ? settings.gloss : 0.12,
       rim: typeof settings.rim === 'number' ? settings.rim : 0.35, sss: settings.sss || 0, emissive: settings.emissive || 0,
       paint: settings.paint || [0, 0, 0, 0], paint2: settings.paint2 || [0, 0, 0, 0], color2: settings.color2 || null,
-      color3: settings.color3 || null, cast: settings.cast !== false, blend: settings.blend || '' };
+      color3: settings.color3 || null, cast: settings.cast !== false, blend: settings.blend || '', taper: settings.taper || 0 };
   }
 
   function ellipsoid(name, center, radii, material, settings)
@@ -368,71 +381,112 @@ var WasCharacterModel = null;
       bob: [0.15, 0.02, -0.86, 0.95, -0.8, 0, 12], bun: [0.33, 0.08, -0.55, 1.2, -0.05, 0, 4.5], curly: [0.24, 0.1, -0.62, 1.15, -0.1, 0, 8],
       spiky: [0.26, 0.16, -0.55, 1.15, 0, 0, 6.5], long: [0.18, 0.05, -0.92, 0.98, -0.72, 0, 8], ponytail: [0.27, 0.1, -0.5, 1.2, -0.05, 0, 5] }[style];
     var grow = style === 'bob' || style === 'long' ? 1.1 : style === 'curly' ? 1.1 : 1.08;
+    var hat = materials.hat !== 'none';
     var list = [ellipsoid('hair', offset(head, 0, 0.035, -0.02), [HEAD[0] * (grow - 0.005), HEAD[1] * grow, HEAD[2] * grow], hair,
-      { gloss: 0.32, rim: 0.5, paint: [PAINT.hair, settings[0], settings[1], settings[2]], paint2: [settings[3], settings[4], settings[5], settings[6]] })];
-    function lock(name, x, y, z, radii, rotation)
+      { gloss: 0.32, rim: 0.5, taper: HEAD_TAPER, paint: [PAINT.hair, settings[0], settings[1], settings[2]], paint2: [settings[3], settings[4], settings[5], settings[6]] })];
+    /* A lock is a strand-shaded ellipsoid; a positive taper narrows its lower end, a negative one its tip. */
+    function lock(name, x, y, z, radii, rotation, taper)
     {
-      list.push(ellipsoid(name, offset(head, x, y, z), radii, hair, { gloss: 0.3, rim: 0.5, rotation: rotation }));
+      list.push(ellipsoid(name, offset(head, x, y, z), radii, hair,
+        { gloss: 0.3, rim: 0.5, rotation: rotation, taper: taper || 0, paint: [PAINT.strand, 0, 0, 0] }));
+    }
+    /* Overlapping locks fanned across the back of the head, so the hair ends in layers rather than blobs. */
+    function fan(name, xs, y, backZ, radii, tilt, taper)
+    {
+      xs.forEach(function (x) { lock(name, x, y, backZ + 1.1 * x * x, radii, { x: tilt, y: 0, z: -x * 0.9 }, taper); });
     }
     if (style === 'tousled' || style === 'swept' || style === 'spiky' || style === 'ponytail')
     {
       [-1, 1].forEach(function (side)
       {
-        lock('hair-puff', side * 0.44, 0.16, -0.1, [0.13, 0.2, 0.24], { x: 0.1, y: 0, z: side * -0.35 });
+        lock('hair-puff', side * 0.45, 0.14, -0.1, [0.1, 0.2, 0.17], { x: 0.1, y: 0, z: side * -0.3 }, 0.3);
       });
-      if (style !== 'ponytail')
-      {
-        [[-0.2, -0.16, -0.4, 0.3], [0, -0.2, -0.45, 0], [0.2, -0.16, -0.4, -0.3]].forEach(function (entry)
-        {
-          lock('hair-nape', entry[0], entry[1], entry[2], [0.13, 0.17, 0.08], { x: -0.35, y: 0, z: entry[3] });
-        });
-      }
+      if (style !== 'ponytail') fan('hair-nape', [-0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3], -0.22, -0.45, [0.1, 0.16, 0.07], -0.3, 0.35);
     }
-    if (style === 'tousled')
+    /* A hat covers the crown: no tufts, spikes or bun under it, and only the lower curls. */
+    if (!hat && style === 'tousled')
     {
-      lock('hair-tuft', 0.05, 0.53, 0.04, [0.05, 0.13, 0.04], { x: -0.2, y: 0, z: -0.35 });
-      lock('hair-tuft', -0.03, 0.51, 0.02, [0.04, 0.1, 0.035], { x: -0.1, y: 0, z: 0.45 });
+      lock('hair-tuft', 0.05, 0.53, 0.04, [0.05, 0.13, 0.04], { x: -0.2, y: 0, z: -0.35 }, -0.5);
+      lock('hair-tuft', -0.03, 0.51, 0.02, [0.04, 0.1, 0.035], { x: -0.1, y: 0, z: 0.45 }, -0.5);
     }
-    else if (style === 'swept')
+    else if (!hat && style === 'swept')
     {
       lock('hair-lock', -0.12, 0.33, 0.37, [0.3, 0.09, 0.07], { x: -0.35, y: 0, z: -0.32 });
-      lock('hair-tuft', 0.12, 0.52, -0.02, [0.05, 0.12, 0.04], { x: 0, y: 0, z: -0.5 });
+      lock('hair-tuft', 0.12, 0.52, -0.02, [0.05, 0.12, 0.04], { x: 0, y: 0, z: -0.5 }, -0.5);
     }
-    else if (style === 'bun')
+    else if (!hat && style === 'bun')
     {
-      list.push(ellipsoid('hair-bun', offset(head, 0, 0.5, -0.17), [0.17, 0.16, 0.16], hair, { gloss: 0.32, rim: 0.5 }));
+      list.push(ellipsoid('hair-bun', offset(head, 0, 0.5, -0.17), [0.17, 0.16, 0.16], hair, { gloss: 0.32, rim: 0.5, paint: [PAINT.strand, 0, 0, 0] }));
       list.push(ellipsoid('hair-tie', offset(head, 0, 0.41, -0.13), [0.11, 0.035, 0.1], materials.gear, { rotation: { x: 0.45, y: 0, z: 0 } }));
     }
     else if (style === 'curly')
     {
       [[0, 0.48, 0.05], [0.24, 0.42, 0.08], [-0.24, 0.42, 0.08], [0.36, 0.22, 0.05], [-0.36, 0.22, 0.05], [0.14, 0.47, -0.2],
-        [-0.14, 0.47, -0.2], [0.33, 0.25, -0.24], [-0.33, 0.25, -0.24], [0, 0.32, -0.42], [0.18, 0.33, 0.34], [-0.16, 0.34, 0.35]].forEach(function (entry)
+        [-0.14, 0.47, -0.2], [0.33, 0.25, -0.24], [-0.33, 0.25, -0.24], [0, 0.32, -0.42], [0.18, 0.33, 0.34], [-0.16, 0.34, 0.35]].filter(function (entry)
       {
-        list.push(ellipsoid('hair-curl', offset(head, entry[0], entry[1], entry[2]), [0.13, 0.12, 0.13], hair, { mesh: 'low', gloss: 0.25, rim: 0.5 }));
+        return !hat || entry[1] < 0.3;
+      }).forEach(function (entry)
+      {
+        list.push(ellipsoid('hair-curl', offset(head, entry[0], entry[1], entry[2]), [0.13, 0.12, 0.13], hair,
+          { mesh: 'low', gloss: 0.25, rim: 0.5, paint: [PAINT.strand, 0, 0, 0] }));
       });
     }
-    else if (style === 'spiky')
+    else if (!hat && style === 'spiky')
     {
       [[0, 0.5, 0.06, 0, 0.1], [0.17, 0.46, 0.02, -0.4, 0.2], [-0.17, 0.46, 0.02, 0.4, 0.2], [0.09, 0.44, -0.2, -0.2, -0.45], [-0.1, 0.44, -0.2, 0.25, -0.45]].forEach(function (entry)
       {
-        lock('hair-spike', entry[0], entry[1], entry[2], [0.075, 0.17, 0.075], { x: entry[4], y: 0, z: entry[3] });
+        lock('hair-spike', entry[0], entry[1], entry[2], [0.075, 0.17, 0.075], { x: entry[4], y: 0, z: entry[3] }, -0.55);
       });
     }
     else if (style === 'long')
     {
       [-1, 1].forEach(function (side)
       {
-        list.push(box('hair-long', offset(head, side * 0.43, -0.46, -0.05), [0.08, 0.3, 0.15], 0.075, hair, { gloss: 0.3, rim: 0.5, rotation: { x: 0.06, y: 0, z: side * 0.08 } }));
+        lock('hair-long', side * 0.42, -0.44, -0.05, [0.1, 0.36, 0.16], { x: 0.06, y: 0, z: side * 0.08 }, 0.35);
       });
-      list.push(box('hair-back', offset(head, 0, -0.5, -0.28), [0.42, 0.34, 0.1], 0.1, hair, { gloss: 0.25 }));
+      fan('hair-back', [-0.33, -0.22, -0.11, 0, 0.11, 0.22, 0.33], -0.5, -0.3, [0.13, 0.4, 0.1], -0.12, 0.3);
     }
     else if (style === 'ponytail')
     {
       list.push(ellipsoid('hair-tie', offset(head, 0, 0.16, -0.5), [0.085, 0.085, 0.05], materials.gear, { rotation: { x: 0.5, y: 0, z: 0 } }));
-      list.push(ellipsoid('hair-tail', offset(head, 0.02, -0.08, -0.6), [0.15, 0.24, 0.12], hair, { gloss: 0.3, rim: 0.5, rotation: { x: -0.35, y: 0, z: 0.15 } }));
-      list.push(ellipsoid('hair-tail', offset(head, 0.05, -0.3, -0.58), [0.1, 0.13, 0.08], hair, { gloss: 0.3, rim: 0.5, rotation: { x: 0.25, y: 0, z: -0.3 } }));
+      lock('hair-tail', 0.02, -0.05, -0.6, [0.14, 0.22, 0.11], { x: -0.35, y: 0, z: 0.15 }, 0.3);
+      lock('hair-tail', 0.04, -0.3, -0.6, [0.11, 0.2, 0.09], { x: 0.1, y: 0, z: -0.2 }, 0.4);
+      lock('hair-tail', 0.08, -0.53, -0.56, [0.075, 0.16, 0.065], { x: 0.25, y: 0, z: -0.4 }, 0.5);
+    }
+    if (hat)
+    {
+      var felt = materials.hatColor;
+      var shell = [HEAD[0] * 1.14, HEAD[1] * 1.14, HEAD[2] * 1.14];
+      if (materials.hat === 'cap')
+      {
+        /* Six-panel dome cut above the brow, a clearly darker brim sloping down in front, and a button on top. */
+        list.push(ellipsoid('hat', offset(head, 0, 0.05, -0.02), shell, felt,
+          { gloss: 0.06, rim: 0.3, taper: HEAD_TAPER, paint: [PAINT.cap, 0.5, 0, 0], paint2: [1.4, 0.35, 0, 0] }));
+        list.push(ellipsoid('hat-brim', offset(head, 0, 0.27, 0.52), [0.3, 0.03, 0.27], tone(felt, 0.72), { gloss: 0.1, rotation: { x: 0.3, y: 0, z: 0 } }));
+        list.push(ellipsoid('hat-button', offset(head, 0, 0.57, -0.02), [0.04, 0.03, 0.04], tone(felt, 0.85), { mesh: 'low' }));
+      }
+      else
+      {
+        /* Knit dome, a thicker folded cuff around the brow and a pom-pom. Both are cut by the same latitude line. */
+        list.push(ellipsoid('hat', offset(head, 0, 0.05, -0.02), shell, felt,
+          { gloss: 0.04, rim: 0.3, taper: HEAD_TAPER, paint: [PAINT.beanie, 0, 0, 0.05], paint2: [-1, 0.3, 0, 0] }));
+        list.push(ellipsoid('hat-cuff', offset(head, 0, 0.05, -0.02), [HEAD[0] * 1.19, HEAD[1] * 1.19, HEAD[2] * 1.19], tone(felt, 0.88),
+          { gloss: 0.04, rim: 0.3, taper: HEAD_TAPER, paint: [PAINT.cuff, 0, 0, 0.05], paint2: [-1, 0.3, 0, 0.3] }));
+        list.push(ellipsoid('hat-pom', offset(head, 0, 0.62, -0.02), [0.11, 0.1, 0.11], tone(felt, 1.12), Object.assign({ mesh: 'low' }, cloth(CLOTH.fleece))));
+      }
     }
     return list;
+  }
+
+  /* Character-only finish. The sky rim lifts every silhouette edge by the same amount, so dark materials (black hair,
+     dark shoes) fog over unless it scales with their brightness, and parts too small to show curvature at stage
+     size use the coarse mesh. Furniture shares the shape helpers and keeps its own look. */
+  function finish(part)
+  {
+    var luma = 0.2126 * part.color[0] + 0.7152 * part.color[1] + 0.0722 * part.color[2];
+    part.rim *= 0.35 + 0.65 * Math.min(1, luma * 1.6);
+    if (part.mesh === 'round' && Math.max(part.radius[0], part.radius[1], part.radius[2]) < 0.05) part.mesh = 'low';
+    return part;
   }
 
   /* Exact top of a part: its inner box spans corner * inner and the rounded shell adds direction * radius. */
@@ -477,6 +531,7 @@ var WasCharacterModel = null;
     var outfit = OUTFITS[m.outfit % OUTFITS.length];
     var shirt = m.shirt;
     var sleeve = outfit === 'cardigan' ? m.shirt : shirt;
+    var weave = { tee: CLOTH.cotton, hoodie: CLOTH.fleece, cardigan: CLOTH.knit, shirt: CLOTH.twill, sweater: CLOTH.knit, overalls: CLOTH.cotton }[outfit];
     var dark = tone(shirt, 0.78);
     var body = [];
     var arms = [];
@@ -499,19 +554,19 @@ var WasCharacterModel = null;
       joints.hands[1] = point(0.6 + ringShake, joints.head.y - 0.12, joints.head.z + 0.1);
     }
 
-    legs.push(box('pants', point(0, joints.pelvis.y + 0.01, joints.pelvis.z), [0.27, 0.11, 0.2], 0.1, m.pants, { gloss: 0.08 }));
+    legs.push(box('pants', point(0, joints.pelvis.y + 0.01, joints.pelvis.z), [0.27, 0.11, 0.2], 0.1, m.pants, Object.assign({ gloss: 0.08 }, cloth(CLOTH.twill))));
     [0, 1].forEach(function (index)
     {
-      legs.push(capsule('leg', joints.hips[index], joints.knees[index], 0.108, m.pants, { gloss: 0.08 }));
-      legs.push(capsule('leg', joints.knees[index], joints.ankles[index], 0.098, m.pants, { gloss: 0.08 }));
+      legs.push(capsule('leg', joints.hips[index], joints.knees[index], 0.108, m.pants, Object.assign({ gloss: 0.08, taper: -0.06 }, cloth(CLOTH.twill))));
+      legs.push(capsule('leg', joints.knees[index], joints.ankles[index], 0.098, m.pants, Object.assign({ gloss: 0.08, taper: -0.12 }, cloth(CLOTH.twill))));
       var ankle = joints.ankles[index];
       var footY = Math.max(0.075, ankle.y - 0.055);
-      legs.push(box('shoe', point(ankle.x, footY, ankle.z + 0.06), [0.1, 0.075, 0.165], 0.07, m.shoes, { gloss: 0.3 }));
+      legs.push(box('shoe', point(ankle.x, footY, ankle.z + 0.06), [0.1, 0.075, 0.165], 0.07, m.shoes, { gloss: 0.3, paint: [PAINT.shoe, 0, 0, 0] }));
       legs.push(box('shoe-sole', point(ankle.x, footY - 0.055, ankle.z + 0.065), [0.106, 0.022, 0.172], 0.02,
         m.shoes[0] > 0.8 ? color('d9d3c8') : color('f4f1ea'), { gloss: 0.1 }));
     });
 
-    body.push(box('body', T, [0.29, 0.3, 0.205], 0.18, outfit === 'cardigan' ? m.trim : shirt, { gloss: 0.08 }));
+    body.push(box('body', T, [0.29, 0.3, 0.205], 0.18, outfit === 'cardigan' ? m.trim : shirt, Object.assign({ gloss: 0.08 }, cloth(outfit === 'cardigan' ? CLOTH.cotton : weave))));
     body.push(capsule('neck', point(0, top - 0.06, T.z), point(0, top + 0.08, T.z + 0.01), 0.075, m.skin, { sss: 1 }));
     if (outfit === 'tee' || outfit === 'overalls' || outfit === 'sweater')
     {
@@ -519,8 +574,8 @@ var WasCharacterModel = null;
     }
     if (outfit === 'hoodie')
     {
-      body.push(ellipsoid('hood', point(0, top - 0.06, T.z - 0.15), [0.26, 0.13, 0.13], dark));
-      body.push(box('pocket', point(0, T.y - 0.13, T.z + 0.192), [0.17, 0.075, 0.02], 0.02, dark));
+      body.push(ellipsoid('hood', point(0, top - 0.06, T.z - 0.15), [0.26, 0.13, 0.13], dark, cloth(CLOTH.fleece)));
+      body.push(box('pocket', point(0, T.y - 0.13, T.z + 0.192), [0.17, 0.075, 0.02], 0.02, dark, cloth(CLOTH.fleece)));
       [-1, 1].forEach(function (side)
       {
         body.push(capsule('drawstring', point(side * 0.06, top - 0.06, T.z + 0.19), point(side * 0.07, T.y + 0.06, T.z + 0.212), 0.011, m.trim));
@@ -530,7 +585,7 @@ var WasCharacterModel = null;
     {
       [-1, 1].forEach(function (side)
       {
-        body.push(box('cardigan', point(side * 0.17, T.y, T.z + 0.004), [0.15, 0.295, 0.207], 0.14, shirt, { gloss: 0.06 }));
+        body.push(box('cardigan', point(side * 0.17, T.y, T.z + 0.004), [0.15, 0.295, 0.207], 0.14, shirt, Object.assign({ gloss: 0.06 }, cloth(CLOTH.knit))));
       });
       [0.12, 0, -0.12].forEach(function (y) { body.push(ellipsoid('button', point(0.045, T.y + y, T.z + 0.205), [0.016, 0.016, 0.01], m.trim, { mesh: 'low' })); });
     }
@@ -544,20 +599,28 @@ var WasCharacterModel = null;
     }
     if (outfit === 'sweater')
     {
-      body.push(box('hem', point(0, T.y - 0.255, T.z), [0.296, 0.05, 0.21], 0.05, dark));
-      body.push(box('stripe', point(0, T.y + 0.07, T.z), [0.297, 0.03, 0.211], 0.03, tone(shirt, 0.8)));
+      body.push(box('hem', point(0, T.y - 0.255, T.z), [0.296, 0.05, 0.21], 0.05, dark, cloth(CLOTH.knit)));
+      body.push(box('stripe', point(0, T.y + 0.07, T.z), [0.297, 0.03, 0.211], 0.03, tone(shirt, 0.8), cloth(CLOTH.knit)));
     }
     if (outfit === 'overalls')
     {
-      body.push(box('bib', point(0, T.y - 0.09, T.z + 0.152), [0.17, 0.15, 0.065], 0.065, m.pants, { gloss: 0.05 }));
+      body.push(box('bib', point(0, T.y - 0.09, T.z + 0.152), [0.17, 0.15, 0.065], 0.065, m.pants, Object.assign({ gloss: 0.05 }, cloth(CLOTH.twill))));
       body.push(box('bib-pocket', point(0, T.y - 0.07, T.z + 0.214), [0.07, 0.05, 0.006], 0.006, tone(m.pants, 0.86)));
       [-1, 1].forEach(function (side)
       {
-        body.push(capsule('strap', point(side * 0.13, T.y + 0.1, T.z + 0.2), point(side * 0.16, top - 0.02, T.z), 0.028, m.pants));
+        body.push(capsule('strap', point(side * 0.13, T.y + 0.1, T.z + 0.2), point(side * 0.16, top - 0.02, T.z), 0.028, m.pants, cloth(CLOTH.twill)));
         body.push(ellipsoid('button', point(side * 0.12, T.y + 0.08, T.z + 0.215), [0.022, 0.022, 0.012], color('e3c26a'), { mesh: 'low', gloss: 0.6 }));
       });
     }
     body.push(cylinder('pin', point(-0.15, T.y + 0.13, T.z + 0.203), 0.032, 0.008, accent, { rotation: { x: Math.PI / 2, y: 0, z: 0 }, gloss: 0.5, cast: false }));
+    if (m.badge && /^(tee|shirt|sweater)$/.test(outfit))
+    {
+      [-1, 1].forEach(function (side)
+      {
+        body.push(capsule('lanyard', point(side * 0.075, top - 0.03, T.z + 0.13), point(side * 0.012, T.y + 0.1, T.z + 0.2), 0.011, m.gear, { gloss: 0.3, cast: false }));
+      });
+      body.push(box('badge', point(0, T.y + 0.02, T.z + 0.21), [0.055, 0.07, 0.008], 0.008, m.trim, { gloss: 0.25, cast: false }));
+    }
 
     var longSleeve = outfit === 'hoodie' || outfit === 'cardigan' || outfit === 'sweater';
     [0, 1].forEach(function (index)
@@ -566,19 +629,19 @@ var WasCharacterModel = null;
       var elbow = joints.elbows[index];
       var hand = joints.hands[index];
       var wrist = mix(elbow, hand, 0.8);
-      arms.push(ellipsoid('sleeve', shoulder, [0.115, 0.12, 0.115], sleeve, { gloss: 0.06 }));
+      arms.push(ellipsoid('sleeve', shoulder, [0.115, 0.12, 0.115], sleeve, Object.assign({ gloss: 0.06 }, cloth(weave))));
       if (longSleeve)
       {
-        arms.push(capsule('upper-arm', shoulder, elbow, 0.096, sleeve));
-        arms.push(capsule('forearm', elbow, wrist, 0.09, sleeve));
-        arms.push(capsule('cuff', mix(elbow, hand, 0.68), wrist, 0.097, outfit === 'sweater' ? dark : tone(sleeve, 0.85)));
+        arms.push(capsule('upper-arm', shoulder, elbow, 0.096, sleeve, Object.assign({ taper: -0.06 }, cloth(weave))));
+        arms.push(capsule('forearm', elbow, wrist, 0.09, sleeve, Object.assign({ taper: -0.1 }, cloth(weave))));
+        arms.push(capsule('cuff', mix(elbow, hand, 0.68), wrist, 0.097, outfit === 'sweater' ? dark : tone(sleeve, 0.85), cloth(CLOTH.knit)));
       }
       else
       {
         var cuffAt = outfit === 'shirt' ? 0.92 : 0.45;
-        arms.push(capsule('sleeve', shoulder, mix(shoulder, elbow, cuffAt), outfit === 'shirt' ? 0.1 : 0.106, sleeve));
-        arms.push(capsule('upper-arm', mix(shoulder, elbow, 0.3), elbow, 0.075, m.skin, { sss: 1 }));
-        arms.push(capsule('forearm', elbow, wrist, 0.07, m.skin, { sss: 1 }));
+        arms.push(capsule('sleeve', shoulder, mix(shoulder, elbow, cuffAt), outfit === 'shirt' ? 0.1 : 0.106, sleeve, cloth(weave)));
+        arms.push(capsule('upper-arm', mix(shoulder, elbow, 0.3), elbow, 0.075, m.skin, { sss: 1, taper: -0.06 }));
+        arms.push(capsule('forearm', elbow, wrist, 0.07, m.skin, { sss: 1, taper: -0.1 }));
       }
       arms.push(ellipsoid('hand', hand, [0.074, 0.078, 0.07], m.skin, { sss: 1, gloss: 0.15 }));
       arms.push(ellipsoid('thumb', offset(hand, (index ? -1 : 1) * 0.048, 0.022, 0.03), [0.03, 0.034, 0.03], m.skin, { mesh: 'low', sss: 1 }));
@@ -601,14 +664,14 @@ var WasCharacterModel = null;
     }
 
     var H = joints.head;
-    headGroup.push(ellipsoid('head', H, HEAD.slice(), m.skin, { gloss: 0.22, rim: 0.4, sss: 1,
-      paint: [PAINT.face, face.open, face.mouth, face.eyes], paint2: [m.accessory === 'glasses' ? 1 : 0, face.blush, face.brow, face.gaze],
+    headGroup.push(ellipsoid('head', H, HEAD.slice(), m.skin, { gloss: 0.22, rim: 0.4, sss: 1, taper: HEAD_TAPER,
+      paint: [PAINT.face, face.open, face.mouth, face.eyes], paint2: [(m.accessory === 'glasses' ? 1 : 0) + (m.freckles ? 2 : 0), face.blush, face.brow, face.gaze],
       color2: m.eyes, color3: tone(m.hair, 0.9) }));
     if (m.accessory !== 'headphones')
     {
       [-1, 1].forEach(function (side)
       {
-        headGroup.push(ellipsoid('ear', offset(H, side * 0.5, -0.045, -0.01), [0.072, 0.1, 0.075], m.skin, { sss: 1, mesh: 'low' }));
+        headGroup.push(ellipsoid('ear', offset(H, side * 0.5, -0.045, -0.01), [0.072, 0.1, 0.075], m.skin, { sss: 1, mesh: 'low', paint: [PAINT.ear, side, 0, 0] }));
       });
     }
     hairParts(m, H, stance).forEach(function (part) { headGroup.push(part); });
@@ -631,7 +694,7 @@ var WasCharacterModel = null;
     var turn = joints.headTurn;
     transform(headGroup, offset(H, 0, -0.38, 0), euler(turn.pitch, turn.yaw, turn.roll));
     if (joints.lean) transform(body.concat(headGroup), pelvis, leanBasis);
-    return legs.concat(body, arms, headGroup);
+    return legs.concat(body, arms, headGroup).map(finish);
   }
 
   WasCharacterModel = { hashId: hashId, palette: palette, parts: parts, roundedGeometry: roundedGeometry, silhouetteTop: silhouetteTop, partTop: partTop,
