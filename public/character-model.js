@@ -381,7 +381,7 @@ var WasCharacterModel = null;
       bob: [0.15, 0.02, -0.86, 0.95, -0.8, 0, 12], bun: [0.33, 0.08, -0.55, 1.2, -0.05, 0, 4.5], curly: [0.24, 0.1, -0.62, 1.15, -0.1, 0, 8],
       spiky: [0.26, 0.16, -0.55, 1.15, 0, 0, 6.5], long: [0.18, 0.05, -0.92, 0.98, -0.72, 0, 8], ponytail: [0.27, 0.1, -0.5, 1.2, -0.05, 0, 5] }[style];
     var grow = style === 'bob' || style === 'long' ? 1.1 : style === 'curly' ? 1.1 : 1.08;
-    var hat = materials.hat !== 'none';
+    var hat = materials.hat === 'cap' || materials.hat === 'beanie';
     var list = [ellipsoid('hair', offset(head, 0, 0.035, -0.02), [HEAD[0] * (grow - 0.005), HEAD[1] * grow, HEAD[2] * grow], hair,
       { gloss: 0.32, rim: 0.5, taper: HEAD_TAPER, paint: [PAINT.hair, settings[0], settings[1], settings[2]], paint2: [settings[3], settings[4], settings[5], settings[6]] })];
     /* A lock is a strand-shaded ellipsoid; a positive taper narrows its lower end, a negative one its tip. */
@@ -461,17 +461,18 @@ var WasCharacterModel = null;
       {
         /* Six-panel dome cut above the brow, a clearly darker brim sloping down in front, and a button on top. */
         list.push(ellipsoid('hat', offset(head, 0, 0.05, -0.02), shell, felt,
-          { gloss: 0.06, rim: 0.3, taper: HEAD_TAPER, paint: [PAINT.cap, 0.5, 0, 0], paint2: [1.4, 0.35, 0, 0] }));
+          { gloss: 0.06, rim: 0.3, taper: HEAD_TAPER, cast: false, paint: [PAINT.cap, 0.5, 0, 0], paint2: [1.4, 0.35, 0, 0] }));
         list.push(ellipsoid('hat-brim', offset(head, 0, 0.27, 0.52), [0.3, 0.03, 0.27], tone(felt, 0.72), { gloss: 0.1, rotation: { x: 0.3, y: 0, z: 0 } }));
         list.push(ellipsoid('hat-button', offset(head, 0, 0.57, -0.02), [0.04, 0.03, 0.04], tone(felt, 0.85), { mesh: 'low' }));
       }
       else
       {
-        /* Knit dome, a thicker folded cuff around the brow and a pom-pom. Both are cut by the same latitude line. */
+        /* Knit dome, a thicker folded cuff around the brow and a pom-pom. Both are cut by the same latitude line.
+           The cut shells do not cast: the shadow pass cannot cut them, and they would shade the face. */
         list.push(ellipsoid('hat', offset(head, 0, 0.05, -0.02), shell, felt,
-          { gloss: 0.04, rim: 0.3, taper: HEAD_TAPER, paint: [PAINT.beanie, 0, 0, 0.05], paint2: [-1, 0.3, 0, 0] }));
+          { gloss: 0.04, rim: 0.3, taper: HEAD_TAPER, cast: false, paint: [PAINT.beanie, 0, 0, 0.05], paint2: [-1, 0.3, 0, 0] }));
         list.push(ellipsoid('hat-cuff', offset(head, 0, 0.05, -0.02), [HEAD[0] * 1.19, HEAD[1] * 1.19, HEAD[2] * 1.19], tone(felt, 0.88),
-          { gloss: 0.04, rim: 0.3, taper: HEAD_TAPER, paint: [PAINT.cuff, 0, 0, 0.05], paint2: [-1, 0.3, 0, 0.3] }));
+          { gloss: 0.04, rim: 0.3, taper: HEAD_TAPER, cast: false, paint: [PAINT.cuff, 0, 0, 0.05], paint2: [-1, 0.3, 0, 0.3] }));
         list.push(ellipsoid('hat-pom', offset(head, 0, 0.62, -0.02), [0.11, 0.1, 0.11], tone(felt, 1.12), Object.assign({ mesh: 'low' }, cloth(CLOTH.fleece))));
       }
     }

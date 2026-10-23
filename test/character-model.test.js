@@ -221,3 +221,13 @@ Test('face details ride on paint2: bit 1 is glasses, bit 2 is freckles, and the 
   Assert.equal(named(Model.parts(bare, { stance: 'desk' }), 'head')[0].paint2[0], 0);
   Assert.deepEqual(Model.palette('session-a'), Model.palette('session-a'));
 });
+
+Test('materials from before hats existed still build a head without a hat', function ()
+{
+  var legacy = Object.assign({}, Model.palette('session-a'));
+  delete legacy.hat;
+  delete legacy.hatColor;
+  var parts = Model.parts('session-a', { stance: 'desk', materials: legacy });
+  Assert.equal(named(parts, 'hat').length, 0);
+  Assert.equal(named(parts, 'head').length, 1);
+});
