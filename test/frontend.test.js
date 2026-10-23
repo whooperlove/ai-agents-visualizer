@@ -1335,3 +1335,29 @@ test("after a language change the stage rewrites its own text and receives fresh
   assert.equal(elements.replayFlow.textContent, "Stop replay");
   assert.equal(elements.sceneStatus.textContent, "History replay · not live · 1/2");
 });
+
+test("the floor list shows the top floor first while the data and the up / down order stay from 1F upward", function ()
+{
+  var runtime = frontendRuntime("en");
+  var actors = [node("one"), node("two"), node("three")];
+  var floors = [
+    { id: "f1", name: "Alpha", nodeIds: ["one"] },
+    { id: "f2", name: "Beta", nodeIds: ["two"] },
+    { id: "f3", name: "Gamma", nodeIds: ["three"] }
+  ];
+  var office = { actors: actors, actorById: new Map(actors.map(function (actor) { return [actor.id, actor]; })), floors: floors, floorById: new Map(floors.map(function (floor) { return [floor.id, floor]; })), project: "alpha", stats: { matched: 3, context: 0, hidden: 0 } };
+  runtime.WasOfficeModel = { buildOffice: function () { return office; } };
+  runtime.wasReadFilters = filters;
+  runtime.wasRenderViewScope = function () {};
+  runtime.wasAutoReplayOffice = function () {};
+  runtime.wasState = { model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "f1", reducedMotion: { matches: false }, projectMessages: [],
+    officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "f1" }; } } };
+  runtime.wasElements = {};
+  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  runtime.wasElements.relationFilters.querySelectorAll = function () { return []; };
+  runtime.wasUpdateOffice();
+  var options = runtime.wasElements.officeFloor.children;
+  assert.deepEqual(options.map(function (option) { return option.textContent; }), ["3F · Gamma (1)", "2F · Beta (1)", "1F · Alpha (1)"]);
+  assert.deepEqual(options.map(function (option) { return option.value; }), ["f3", "f2", "f1"]);
+  assert.deepEqual(runtime.wasState.officeFloors.map(function (floor) { return floor.id; }), ["f1", "f2", "f3"], "the floor data keeps its order from 1F upward");
+});

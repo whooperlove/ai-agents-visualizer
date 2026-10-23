@@ -1587,12 +1587,15 @@ function wasUpdateOffice()
   {
     wasState.officeFloorOptionsKey = floorOptionsKey;
     wasClearElement(wasElements.officeFloor);
-    wasState.officeFloors.forEach(function (floor, index)
+    // Listed from the top floor down, like the floors of a building. The data order, and with it the up and
+    // down buttons, still runs from 1F upward.
+    for (var floorIndex = wasState.officeFloors.length - 1; floorIndex >= 0; floorIndex--)
     {
-      var option = wasCreateElement("option", "", (index + 1) + "F · " + wasResolveText(floor.name) + " (" + floor.nodeIds.length + ")");
+      var floor = wasState.officeFloors[floorIndex];
+      var option = wasCreateElement("option", "", (floorIndex + 1) + "F · " + wasResolveText(floor.name) + " (" + floor.nodeIds.length + ")");
       option.value = floor.id;
       wasElements.officeFloor.appendChild(option);
-    });
+    }
   }
   var sceneData = Object.assign({}, wasState.officeData, {
     floors: wasState.officeFloors,
