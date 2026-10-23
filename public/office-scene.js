@@ -400,7 +400,8 @@ var WasOfficeScene = null;
     '  float ndl = dot(n, uLightDirection);',
     '  float wrap = 0.2 + 0.25 * sss;',
     '  float diffuse = clamp((ndl + wrap) / (1.0 + wrap), 0.0, 1.0);',
-    '  float shadow = shadowAt(n);',
+    /* Skin scatters light, so a cast shadow on it is half as dark as on a hard surface. */
+    '  float shadow = mix(shadowAt(n), 1.0, 0.5 * smoothstep(0.4, 0.9, sss));',
     '  float direct = diffuse * shadow;',
     '  vec3 hemi = mix(uGroundColor, uSkyColor, clamp(n.y * 0.5 + 0.5, 0.0, 1.0)) * ao;',
     '  vec3 warm = mix(vec3(1.0), vec3(1.1, 0.8, 0.72), sss);',
@@ -1864,9 +1865,21 @@ var WasOfficeScene = null;
       else cameraX = clamp(cameraX, halfWidth - 0.35, layout.width - halfWidth + 0.35);
     }
 
+    /* Estimate from the name alone, used while a plate cannot be measured (no layout yet, or no DOM metrics). */
     function labelWidth(name)
     {
       return Math.max(156, Math.ceil(measureName(name)) + 46);
+    }
+
+    /* The width the plate needs as laid out: its wider row, name or provider and status, plus padding and border. Measured
+       rather than guessed so the side space is the same on every plate and translated texts and fonts always fit. */
+    function naturalLabelWidth(label)
+    {
+      var style = label.element.style;
+      style.width = 'max-content';
+      var measured = label.element.offsetWidth || 0;
+      style.width = '';
+      return measured > 0 ? Math.ceil(measured) : 0;
     }
 
     function makeLabel(actor)
@@ -2111,13 +2124,18 @@ var WasOfficeScene = null;
         label.provider.textContent = actor.provider === 'codex' ? 'Codex' : actor.provider === 'claude' ? 'Claude' : text(actor.provider || sceneT('scene.label.providerUnknown'));
         label.activity.textContent = activityText(actor);
         label.status.textContent = statusText(actor);
+        var contentKey = [label.name.textContent, label.provider.textContent, label.activity.textContent, label.status.textContent].join('\n');
+        if (label.contentKey !== contentKey)
+        {
+          label.contentKey = contentKey;
+          label.width = 0;
+        }
         label.element.setAttribute('data-was-provider', text(actor.provider));
         label.element.setAttribute('data-was-activity', resting(actor) ? 'inactive' : actor.activity && actor.activity.category || 'unconfirmed');
         label.element.setAttribute('data-was-status', statusKey(actor));
         /* Read out by assistive technology and listed in the session index; never a title attribute, which browsers show as a tooltip over the plate. */
         var description = name + ' · ' + label.provider.textContent + ' · ' + label.activity.textContent + ' · ' + label.status.textContent;
         label.element.setAttribute('aria-label', description);
-        label.width = labelWidth(name);
         var item = indexItems.get(actor.id);
         if (!item)
         {
@@ -2350,7 +2368,8 @@ var WasOfficeScene = null;
           if (label)
           {
             label.element.hidden = false;
-            var widthLabel = label.width || labelWidth(text(actor.name || actor.id));
+            if (!label.width) label.width = naturalLabelWidth(label) || labelWidth(text(actor.name || actor.id));
+            var widthLabel = label.width;
             label.element.style.width = widthLabel + 'px';
             label.element.style.left = Math.round(head.x - widthLabel / 2) + 'px';
             if (!label.height) label.height = label.element.offsetHeight || 0;
@@ -2501,7 +2520,7 @@ var WasOfficeScene = null;
     {
       if (destroyed) return;
       renderStaticText();
-      labels.forEach(function (label) { label.height = 0; });
+      labels.forEach(function (label) { label.height = 0; label.width = 0; });
       reconcileLabels();
       renderFloorBadge();
       renderStageHeading(currentLayout());

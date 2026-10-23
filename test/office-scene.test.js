@@ -131,6 +131,13 @@ function createBrowserHarness(settings)
         return null;
       };
     }
+    if (tag === 'button' && settings.naturalLabelWidth)
+    {
+      Object.defineProperty(result, 'offsetWidth', { get: function ()
+      {
+        return result.style.width === 'max-content' ? settings.naturalLabelWidth(result) : parseFloat(result.style.width) || 0;
+      } });
+    }
     return result;
   }
   var document = eventTarget({ hidden: false, createElement: element });
@@ -460,6 +467,27 @@ Test('a tap on empty stage releases the selection and tells the host, but a drag
   tap(2, 2);
   Assert.equal(released, 1, 'a second tap has nothing left to release');
   scene.destroy();
+});
+
+Test('a name tag is as wide as its measured wider row, and the name estimate stands in when nothing can be measured', function ()
+{
+  function plateWidth(plate) { return find(plate, 'was-office-actor-name').textContent.length * 8 + 60; }
+  var measured = createBrowserHarness({ naturalLabelWidth: plateWidth });
+  var scene = measured.renderer.create({ container: measured.container });
+  scene.setOffice(makeOffice());
+  measured.flush();
+  var short = labelFor(measured, 'c');
+  var long = labelFor(measured, 'd');
+  Assert.equal(short.style.width, plateWidth(short) + 'px', 'the plate takes the width the layout reports');
+  Assert.equal(long.style.width, plateWidth(long) + 'px', 'a long name is not cut to a cap');
+  Assert.ok(parseFloat(long.style.width) > parseFloat(short.style.width));
+  scene.destroy();
+  var plain = createBrowserHarness();
+  var fallback = plain.renderer.create({ container: plain.container });
+  fallback.setOffice(makeOffice());
+  plain.flush();
+  Assert.equal(labelFor(plain, 'c').style.width, Math.max(156, 'codex-project-c'.length * 7 + 46) + 'px', 'without layout the estimate from the name is used');
+  fallback.destroy();
 });
 
 Test('shift and wheel switch floors one at a time and the stage names the current floor', function ()

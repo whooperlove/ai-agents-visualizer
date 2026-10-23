@@ -462,7 +462,7 @@ var WasCharacterModel = null;
         /* Six-panel dome cut above the brow, a clearly darker brim sloping down in front, and a button on top. */
         list.push(ellipsoid('hat', offset(head, 0, 0.05, -0.02), shell, felt,
           { gloss: 0.06, rim: 0.3, taper: HEAD_TAPER, cast: false, paint: [PAINT.cap, 0.5, 0, 0], paint2: [1.4, 0.35, 0, 0] }));
-        list.push(ellipsoid('hat-brim', offset(head, 0, 0.27, 0.52), [0.3, 0.03, 0.27], tone(felt, 0.72), { gloss: 0.1, rotation: { x: 0.3, y: 0, z: 0 } }));
+        list.push(ellipsoid('hat-brim', offset(head, 0, 0.29, 0.5), [0.28, 0.028, 0.22], tone(felt, 0.72), { gloss: 0.1, rotation: { x: 0.22, y: 0, z: 0 } }));
         list.push(ellipsoid('hat-button', offset(head, 0, 0.57, -0.02), [0.04, 0.03, 0.04], tone(felt, 0.85), { mesh: 'low' }));
       }
       else
