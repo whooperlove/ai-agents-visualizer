@@ -609,6 +609,25 @@ Test('the sticky-note layer rides the floor transition together with the room an
   Assert.ok(reduced.indexOf('.was-office-floor-up .was-office-partner-layer') >= 0 && reduced.indexOf('.was-office-floor-down .was-office-partner-layer') >= 0, 'reduced motion switches it off as well');
 });
 
+Test('a working session with recent activity gets a green outline on its plate and its tail without changing the plate size', function ()
+{
+  var css = Fs.readFileSync(Path.join(__dirname, '../public/office-scene.css'), 'utf8');
+  var selector = '.was-office-actor-label[data-was-status="running"][data-was-activity="recent"]';
+  function rule(text)
+  {
+    var start = css.indexOf(text + '\n{');
+    Assert.ok(start >= 0, text + ' has a rule');
+    return css.slice(start, css.indexOf('}', start));
+  }
+  var plate = rule(selector);
+  Assert.ok(plate.indexOf('border: 2px solid rgb(79, 209, 139);') >= 0, 'the plate outline is 2px green');
+  Assert.ok(plate.indexOf('padding: 5px 11px 6px;') >= 0, 'the padding gives back the extra border pixel (base 6px 12px 7px)');
+  var tail = rule(selector + '::after');
+  Assert.ok(/border-right: 2px solid;/.test(tail) && /border-bottom: 2px solid;/.test(tail), 'the tail outline is 2px as well');
+  Assert.ok(tail.indexOf('border-right-color: inherit;') >= 0 && tail.indexOf('border-bottom-color: inherit;') >= 0, 'the tail follows the plate color in hover and selection');
+  Assert.ok(css.indexOf(selector) < css.indexOf('.was-office-actor-label.was-office-actor-selected[data-was-provider="codex"]'), 'a selected plate keeps its own color');
+});
+
 Test('stacks follow their character across floors and wheel input over a stack still pans or switches floors', function ()
 {
   var browser = partnerBrowser();
