@@ -1015,8 +1015,63 @@ function wasGetBranch(model, id)
   return branch;
 }
 
-function wasBuildView(model, filters, expanded, focusId)
+// Status sort order: sessions that are doing something first, then the ones that need a look, then the finished ones.
+var wasStatusRank = ["running", "waiting", "interrupted", "unknown", "idle", "completed"];
+var wasSortKeys = ["recent", "status", "name"];
+// The direction a column starts with when it is chosen: newest, working and A first.
+var wasSortFirstDirection = { recent: "desc", status: "asc", name: "asc" };
+var wasDefaultSort = { key: "recent", direction: "desc" };
+
+function wasParseSort(value)
 {
+  var parts = wasText(value).split(":");
+  if (wasSortKeys.indexOf(parts[0]) === -1 || (parts[1] !== "asc" && parts[1] !== "desc"))
+  {
+    return null;
+  }
+  return { key: parts[0], direction: parts[1] };
+}
+
+function wasSortValue()
+{
+  var sort = wasState.sort || wasDefaultSort;
+  return sort.key + ":" + sort.direction;
+}
+
+function wasNodeTime(node)
+{
+  return new Date(node.lastSeen || 0).getTime() || 0;
+}
+
+function wasSortComparator(model, sort)
+{
+  var sign = sort.direction === "desc" ? -1 : 1;
+  return function (a, b)
+  {
+    var first = model.nodeMap.get(a);
+    var second = model.nodeMap.get(b);
+    var result;
+    if (sort.key === "status")
+    {
+      result = wasStatusRank.indexOf(wasSafeStatus(first.status)) - wasStatusRank.indexOf(wasSafeStatus(second.status));
+    }
+    else if (sort.key === "name")
+    {
+      result = first.name.localeCompare(second.name, undefined, { numeric: true });
+    }
+    else
+    {
+      result = wasNodeTime(first) - wasNodeTime(second);
+    }
+    // Ties keep the default order (newest first, then name) whichever way the chosen column runs.
+    return result * sign || wasNodeTime(second) - wasNodeTime(first) || first.name.localeCompare(second.name) || a.localeCompare(b);
+  };
+}
+
+function wasBuildView(model, filters, expanded, focusId, sort)
+{
+  // The model already holds the default order, so only another choice needs sorting.
+  var compare = sort && wasParseSort(sort.key + ":" + sort.direction) && !(sort.key === wasDefaultSort.key && sort.direction === wasDefaultSort.direction) ? wasSortComparator(model, sort) : null;
   var matched = new Set();
   var candidates = new Set();
   var included = new Set();
@@ -1129,6 +1184,10 @@ function wasBuildView(model, filters, expanded, focusId)
   {
     return included.has(id);
   });
+  if (compare)
+  {
+    roots.sort(compare);
+  }
   var stack = [];
   for (var rootIndex = roots.length - 1; rootIndex >= 0; rootIndex -= 1)
   {
@@ -1141,6 +1200,10 @@ function wasBuildView(model, filters, expanded, focusId)
     {
       return included.has(id);
     });
+    if (compare)
+    {
+      children.sort(compare);
+    }
     item.children = children;
     item.expanded = (expanded.has(item.id) || forcedExpanded.has(item.id)) && children.length > 0;
     item.context = !matched.has(item.id);
@@ -1229,7 +1292,7 @@ function wasSavePreferences()
   }
   try
   {
-    sessionStorage.setItem("was_observatory_preferences", JSON.stringify({ filters: wasReadFilters(), view: wasState.viewMode, edgeScope: wasElements.edgeScope.value, graphLayout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeQuiet: wasElements.officeQuiet.checked }));
+    sessionStorage.setItem("was_observatory_preferences", JSON.stringify({ filters: wasReadFilters(), view: wasState.viewMode, edgeScope: wasElements.edgeScope.value, graphLayout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeQuiet: wasElements.officeQuiet.checked, sort: wasSortValue() }));
   }
   catch (error)
   {
@@ -1265,6 +1328,7 @@ function wasRestorePreferences()
     wasState.officeFloorId = typeof preference.officeFloorId === "string" ? preference.officeFloorId : null;
     wasElements.officeGrouped.checked = preference.officeGrouped !== false;
     wasElements.officeQuiet.checked = preference.officeQuiet !== false;
+    wasState.sort = wasParseSort(preference.sort) || wasState.sort;
   }
   catch (error)
   {
@@ -1359,7 +1423,7 @@ function wasUpdateView(resetScroll)
     return;
   }
   var filters = wasReadFilters();
-  wasState.view = wasBuildView(wasState.model, filters, wasState.expanded, wasState.focusId);
+  wasState.view = wasBuildView(wasState.model, filters, wasState.expanded, wasState.focusId, wasState.sort);
   if (resetScroll)
   {
     wasElements.tree.scrollTop = 0;
@@ -2918,6 +2982,73 @@ function wasSetSidebar(collapsed, persist)
   wasResizeGraph();
 }
 
+function wasRenderDetailToggleLabel()
+{
+  wasElements.detailToggle.querySelector("span").textContent = wasState.detailCollapsed ? wasT("app.detail.expandPanel") : wasT("app.detail.collapsePanel");
+}
+
+function wasSetDetail(collapsed, persist)
+{
+  wasState.detailCollapsed = collapsed;
+  document.body.classList.toggle("was-detail-collapsed", collapsed);
+  wasElements.detailToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  wasRenderDetailToggleLabel();
+  if (persist)
+  {
+    try
+    {
+      localStorage.setItem("was_observatory_detail_collapsed", collapsed ? "1" : "0");
+    }
+    catch (error)
+    {
+      // A browser storage restriction does not affect the current layout.
+    }
+  }
+  wasResizeGraph();
+}
+
+function wasSortLabel(sort)
+{
+  var labels =
+  {
+    "recent:desc": wasT("page.sort.recentDesc"),
+    "recent:asc": wasT("page.sort.recentAsc"),
+    "status:asc": wasT("page.sort.statusAsc"),
+    "status:desc": wasT("page.sort.statusDesc"),
+    "name:asc": wasT("page.sort.nameAsc"),
+    "name:desc": wasT("page.sort.nameDesc")
+  };
+  return labels[sort.key + ":" + sort.direction];
+}
+
+function wasRenderSort()
+{
+  var sort = wasState.sort || wasDefaultSort;
+  wasElements.treeSort.value = wasSortValue();
+  wasElements.treeColumns.querySelectorAll("[data-was-sort]").forEach(function (button)
+  {
+    var active = button.getAttribute("data-was-sort") === sort.key;
+    button.setAttribute("data-was-sort-state", active ? sort.direction : "none");
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function wasApplySort(sort)
+{
+  if (!sort)
+  {
+    return;
+  }
+  wasState.sort = sort;
+  wasRenderSort();
+  wasUpdateView(true);
+  if (wasState.selectedId)
+  {
+    wasScrollToNode(wasState.selectedId);
+  }
+  wasElements.announcement.textContent = wasT("app.announce.sorted", { order: wasSortLabel(sort) });
+}
+
 function wasEnterPresentation()
 {
   if (wasState.presentation)
@@ -3497,8 +3628,6 @@ function wasRenderHealth()
 {
   var partial = !!(wasState.snapshot && wasState.snapshot.stats && wasState.snapshot.stats.loading);
   var connected = wasState.connected && !wasState.loadError;
-  wasElements.connectionDot.classList.toggle("was-connected", connected);
-  wasElements.connectionText.textContent = wasState.loadError ? wasT("app.health.snapshotFailed") : connected ? wasT("app.health.connected") : wasT("app.health.reconnecting");
   wasElements.liveBadge.classList.toggle("was-live", connected && !partial);
   wasElements.liveBadge.textContent = wasState.loadError ? wasT("app.health.badgeCheck") : partial ? wasT("app.health.badgePartial") : connected ? wasT("app.health.badgeLive") : wasT("app.health.badgeAuto");
   wasElements.updated.textContent = wasState.snapshot ? wasT("app.health.observed", { time: wasDateTime(wasState.snapshot.generatedAt || wasState.lastSuccess) }) : wasT("app.health.loading");
@@ -3864,6 +3993,25 @@ function wasBindEvents()
   wasElements.sidebarToggle.addEventListener("click", function ()
   {
     wasSetSidebar(!wasState.sidebarCollapsed, true);
+  });
+  wasElements.detailToggle.addEventListener("click", function ()
+  {
+    wasSetDetail(!wasState.detailCollapsed, true);
+  });
+  wasElements.treeSort.addEventListener("change", function ()
+  {
+    wasApplySort(wasParseSort(wasElements.treeSort.value));
+  });
+  wasElements.treeColumns.addEventListener("click", function (event)
+  {
+    var button = event.target.closest("[data-was-sort]");
+    if (!button)
+    {
+      return;
+    }
+    var key = button.getAttribute("data-was-sort");
+    var current = wasState.sort || wasDefaultSort;
+    wasApplySort({ key: key, direction: current.key === key ? (current.direction === "asc" ? "desc" : "asc") : wasSortFirstDirection[key] });
   });
   wasElements.graphLayout.addEventListener("change", function ()
   {
@@ -4314,6 +4462,7 @@ function wasRefreshLocale()
     wasState.officeTravel = null;
   }
   wasRenderSidebarLabel();
+  wasRenderDetailToggleLabel();
   wasElements.replayFlow.textContent = wasState.replayStatus ? wasT("app.replay.stop") : wasT("app.replay.start");
   wasRenderOfficeTravel();
   wasRenderGraphStatus();
@@ -4414,6 +4563,8 @@ function wasInitialize()
     animationTimer: null,
     reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)"),
     sidebarCollapsed: false,
+    detailCollapsed: false,
+    sort: { key: wasDefaultSort.key, direction: wasDefaultSort.direction },
     presentation: null,
     graphEdges: [],
     graphRoutes: new Map(),
@@ -4439,7 +4590,7 @@ function wasInitialize()
     loadError: null
   };
   wasElements = {};
-  var ids = ["search", "project", "provider", "activity", "activity-summary", "status", "kind", "relation-filters", "clear-filters", "refresh", "connection-dot", "connection-text", "live-badge", "updated", "project-label", "stat-total", "stat-total-note", "stat-running", "stat-waiting", "stat-attention", "notice", "view-tree", "view-graph", "collapse-all", "expand-all", "focus-branch", "reset-view", "result-count", "clear-focus", "search-context", "tree-view", "tree", "tree-spacer", "tree-rows", "graph-view", "edge-scope", "graph-count", "canvas-wrap", "graph", "zoom-out", "zoom-label", "zoom-in", "fit-graph", "empty", "empty-title", "empty-text", "empty-reset", "detail", "diagnostics-toggle", "diagnostics", "announcement"];
+  var ids = ["search", "project", "provider", "activity", "activity-summary", "status", "kind", "relation-filters", "clear-filters", "refresh", "live-badge", "updated", "project-label", "stat-total", "stat-total-note", "stat-running", "stat-waiting", "stat-attention", "notice", "view-tree", "view-graph", "collapse-all", "expand-all", "focus-branch", "reset-view", "result-count", "clear-focus", "search-context", "tree-view", "tree", "tree-spacer", "tree-rows", "graph-view", "edge-scope", "graph-count", "canvas-wrap", "graph", "zoom-out", "zoom-label", "zoom-in", "fit-graph", "empty", "empty-title", "empty-text", "empty-reset", "detail", "diagnostics-toggle", "diagnostics", "announcement"];
   ids.forEach(function (id)
   {
     var key = id.replace(/-([a-z])/g, function (match, letter)
@@ -4448,7 +4599,7 @@ function wasInitialize()
     });
     wasElements[key] = document.getElementById("was-" + id);
   });
-  ["sidebar", "sidebar-toggle", "graph-layout", "show-quiet", "show-grid", "quiet-count", "scene-status", "presentation", "presentation-exit", "presentation-detail", "presentation-flow", "overview-title", "overview-summary", "message-summary", "message-feed", "message-more", "replay-flow", "connection-list", "connection-summary", "view-office", "office-view", "office-grouped", "office-quiet", "office-floor", "office-up", "office-down", "office-stage", "office-summary", "office-travel", "office-left", "office-right", "office-zoom-in", "office-zoom-out", "locale"].forEach(function (id)
+  ["sidebar", "sidebar-toggle", "detail-toggle", "tree-sort", "tree-columns", "graph-layout", "show-quiet", "show-grid", "quiet-count", "scene-status", "presentation", "presentation-exit", "presentation-detail", "presentation-flow", "overview-title", "overview-summary", "message-summary", "message-feed", "message-more", "replay-flow", "connection-list", "connection-summary", "view-office", "office-view", "office-grouped", "office-quiet", "office-floor", "office-up", "office-down", "office-stage", "office-summary", "office-travel", "office-left", "office-right", "office-zoom-in", "office-zoom-out", "locale"].forEach(function (id)
   {
     var key = id.replace(/-([a-z])/g, function (match, letter) { return letter.toUpperCase(); });
     wasElements[key] = document.getElementById("was-" + id);
@@ -4463,14 +4614,17 @@ function wasInitialize()
   wasElements.graphOmissions.setAttribute("role", "status");
   wasElements.graphView.insertBefore(wasElements.graphOmissions, wasElements.canvasWrap);
   wasRestorePreferences();
+  wasRenderSort();
   try
   {
     wasElements.showGrid.checked = localStorage.getItem("was_observatory_show_grid") !== "0";
     wasSetSidebar(localStorage.getItem("was_observatory_sidebar_collapsed") === "1", false);
+    wasSetDetail(localStorage.getItem("was_observatory_detail_collapsed") === "1", false);
   }
   catch (error)
   {
     wasSetSidebar(false, false);
+    wasSetDetail(false, false);
   }
   wasBindEvents();
   wasBindLocale();
@@ -4489,7 +4643,7 @@ function wasInitialize()
 
 if (typeof module !== "undefined" && module.exports)
 {
-  module.exports = { wasBuildModel: wasBuildModel, wasBuildView: wasBuildView, wasGetBranch: wasGetBranch, wasNormalizeSnapshot: wasNormalizeSnapshot, wasGetActivity: wasGetActivity, wasGetEdgeHistory: wasGetEdgeHistory, wasBuildOperatingView: wasBuildOperatingView, wasObserveMessages: wasObserveMessages, wasSummarizeMessages: wasSummarizeMessages, wasMessageResolved: wasMessageResolved, wasBundleConnections: wasBundleConnections, wasRouteConnection: wasRouteConnection, wasPointOnRoute: wasPointOnRoute, wasConnectionLabel: wasConnectionLabel, wasConnectionDirectionLabel: wasConnectionDirectionLabel };
+  module.exports = { wasBuildModel: wasBuildModel, wasBuildView: wasBuildView, wasParseSort: wasParseSort, wasGetBranch: wasGetBranch, wasNormalizeSnapshot: wasNormalizeSnapshot, wasGetActivity: wasGetActivity, wasGetEdgeHistory: wasGetEdgeHistory, wasBuildOperatingView: wasBuildOperatingView, wasObserveMessages: wasObserveMessages, wasSummarizeMessages: wasSummarizeMessages, wasMessageResolved: wasMessageResolved, wasBundleConnections: wasBundleConnections, wasRouteConnection: wasRouteConnection, wasPointOnRoute: wasPointOnRoute, wasConnectionLabel: wasConnectionLabel, wasConnectionDirectionLabel: wasConnectionDirectionLabel };
 }
 
 if (typeof document !== "undefined")

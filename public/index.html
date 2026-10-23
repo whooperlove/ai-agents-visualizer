@@ -27,8 +27,7 @@
       <div class="was-sidebar-section-label was-brand-label">WORKSPACE</div>
       <div class="was-workspace">
         <span class="was-brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8.2 8.4l7.8 1.3M7.8 9.8l3.4 6.9M16.3 11.4l-3.8 5.3"/><circle cx="7" cy="8" r="2.4" fill="currentColor" stroke="none"/><circle cx="17" cy="9.8" r="2.4" fill="currentColor" stroke="none"/><circle cx="11.8" cy="17.6" r="2.4" fill="currentColor" stroke="none"/></svg></span>
-        <span class="was-workspace-name"><span data-i18n="page.workspace.name">Local session control room</span><small data-i18n="page.workspace.note">Read-only · live observation</small></span>
-        <span class="was-local-dot" aria-hidden="true"></span>
+        <span class="was-workspace-name"><span data-i18n="page.workspace.name">Local session control room</span><small data-i18n="page.workspace.note">Read-only</small></span>
       </div>
 
       <div class="was-sidebar-group">
@@ -74,7 +73,7 @@
         </div>
       </div>
 
-      <div class="was-sidebar-footer"><span class="was-connection-dot" id="was-connection-dot"></span><span id="was-connection-text">Preparing connection</span><button id="was-refresh" class="was-icon-button" type="button" aria-label="Refresh now" title="Refresh now" data-i18n-aria-label="page.refresh" data-i18n-title="page.refresh"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M11.8 1.9v2.8H9"/></svg></button></div>
+      <div class="was-sidebar-footer"><button id="was-refresh" class="was-button was-button-subtle" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M11.8 1.9v2.8H9"/></svg><span data-i18n="page.refresh">Refresh now</span></button></div>
     </aside>
 
     <main class="was-main" id="was-main">
@@ -101,6 +100,7 @@
             <div class="was-button-group was-tree-actions"><button id="was-collapse-all" class="was-button was-button-subtle" type="button" data-i18n="page.tree.collapseAll">Collapse all</button><button id="was-expand-all" class="was-button was-button-subtle" type="button" data-i18n="page.tree.expandAll">Expand all</button></div>
             <span class="was-action-divider"></span>
             <div class="was-button-group"><button id="was-focus-branch" class="was-button was-button-subtle" type="button" title="Focuses on a sub-branch of the original spawn hierarchy. Separate from management relations." data-i18n-title="page.focus.branchTitle" disabled data-i18n="page.focus.branch">Focus branch</button><button id="was-reset-view" class="was-button was-button-subtle" type="button" data-i18n="page.view.reset">Reset view</button></div>
+            <button id="was-detail-toggle" class="was-button was-button-subtle was-detail-toggle" type="button" aria-controls="was-detail" aria-expanded="true" title="Collapse / expand the detail panel" data-i18n-title="page.detail.toggleTitle"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.75" width="12" height="10.5" rx="2"/><path d="M9.75 2.75v10.5"/></svg><span>Collapse details</span></button>
             <button id="was-presentation" class="was-button was-button-primary" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 6V2.75H6M10 2.75h3.25V6M13.25 10v3.25H10M6 13.25H2.75V10"/></svg><span data-i18n="page.presentation.enter">Wide view</span></button>
           </div>
         </div>
@@ -110,7 +110,11 @@
           <div class="was-presentation-bar"><div class="was-presentation-heading"><span class="was-eyebrow">PROJECT OVERVIEW</span><h2 id="was-overview-title">Project operations overview</h2><span id="was-overview-summary"></span></div><div class="was-presentation-actions"><button id="was-presentation-flow" class="was-button" type="button" aria-expanded="false">Delivery history</button><button id="was-presentation-detail" class="was-button" type="button" aria-expanded="false" data-i18n="page.presentation.detail">Session details</button><button id="was-presentation-exit" class="was-button was-button-primary" type="button"><span data-i18n="page.presentation.exit">Close wide view</span> <kbd>Esc</kbd></button></div></div>
           <div class="was-visual-pane">
             <div id="was-tree-view" class="was-tree-view">
-              <div class="was-tree-columns" aria-hidden="true"><span data-i18n="page.tree.colSession">Session / task</span><span data-i18n="page.tree.colStatus">Status</span><span data-i18n="page.tree.colLastSeen">Last observed</span></div>
+              <div class="was-tree-options">
+                <div class="was-option-group"><label for="was-tree-sort" data-i18n="page.sort.label">Sort</label><select id="was-tree-sort" title="Status order: Working → Waiting for reply → Interrupted → Status unknown → Idle → Completed" data-i18n-title="page.sort.selectTitle"><option value="recent:desc" data-i18n="page.sort.recentDesc">Last observed · newest first</option><option value="recent:asc" data-i18n="page.sort.recentAsc">Last observed · oldest first</option><option value="status:asc" data-i18n="page.sort.statusAsc">Status · working first</option><option value="status:desc" data-i18n="page.sort.statusDesc">Status · idle and completed first</option><option value="name:asc" data-i18n="page.sort.nameAsc">Name · A → Z</option><option value="name:desc" data-i18n="page.sort.nameDesc">Name · Z → A</option></select></div>
+                <span class="was-tree-sort-note" data-i18n="page.sort.note">Sessions are sorted among siblings under the same parent</span>
+              </div>
+              <div id="was-tree-columns" class="was-tree-columns"><button type="button" class="was-sort-button" data-was-sort="name" title="Sort by this column · click again to reverse" data-i18n-title="page.sort.columnTitle"><span data-i18n="page.tree.colSession">Session / task</span></button><button type="button" class="was-sort-button" data-was-sort="status" title="Sort by this column · click again to reverse" data-i18n-title="page.sort.columnTitle"><span data-i18n="page.tree.colStatus">Status</span></button><button type="button" class="was-sort-button" data-was-sort="recent" title="Sort by this column · click again to reverse" data-i18n-title="page.sort.columnTitle"><span data-i18n="page.tree.colLastSeen">Last observed</span></button></div>
               <div id="was-tree" class="was-tree" role="tree" tabindex="0" aria-label="Session hierarchy. Use the up and down arrows to move and the left and right arrows to collapse and expand." data-i18n-aria-label="page.tree.label"><div id="was-tree-spacer" class="was-tree-spacer"></div><div id="was-tree-rows" class="was-tree-rows"></div></div>
               <div class="was-tree-footer"><span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="page.tree.keyMove">Move</span> <span class="was-key-gap"></span><kbd>←</kbd><kbd>→</kbd> <span data-i18n="page.tree.keyToggle">Collapse / expand</span> <span class="was-key-gap"></span><kbd>Enter</kbd> <span data-i18n="page.tree.keySelect">Select</span></span><span data-i18n="page.tree.searchNote">Search also finds sessions inside collapsed branches</span></div>
             </div>

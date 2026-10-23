@@ -236,20 +236,6 @@ kbd
   transition: color .14s, background-color .14s;
 }
 .was-text-button:hover { color: var(--was-accent-strong); background: var(--was-accent-soft); }
-.was-icon-button
-{
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--was-muted);
-  transition: color .14s, background-color .14s;
-}
-.was-icon-button svg { width: 15px; height: 15px; }
-.was-icon-button:hover { color: var(--was-text); background: rgba(255, 255, 255, .06); }
 
 /* Joined button group (toolbars) */
 .was-button-group
@@ -319,6 +305,7 @@ kbd
 }
 select.was-input,
 .was-graph-options select,
+.was-tree-options select,
 .was-office-toolbar select,
 .was-detail-relation-filter select
 {
@@ -333,6 +320,7 @@ select.was-input,
   cursor: pointer;
 }
 .was-graph-options select,
+.was-tree-options select,
 .was-office-toolbar select,
 .was-detail-relation-filter select
 {
@@ -348,9 +336,11 @@ select.was-input,
   transition: border-color .14s, box-shadow .14s;
 }
 .was-graph-options select:hover,
+.was-tree-options select:hover,
 .was-office-toolbar select:hover,
 .was-detail-relation-filter select:hover { border-color: var(--was-border-strong); }
 .was-graph-options select:focus-visible,
+.was-tree-options select:focus-visible,
 .was-office-toolbar select:focus-visible,
 .was-detail-relation-filter select:focus-visible
 {
@@ -440,16 +430,6 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--was-focus); outl
 .was-brand-mark svg { width: 22px; height: 22px; }
 .was-workspace-name { min-width: 0; font-size: 13px; font-weight: 650; line-height: 1.3; }
 .was-workspace small { display: block; margin-top: 2px; color: var(--was-muted); font-size: 11px; font-weight: 400; }
-.was-local-dot
-{
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  margin-left: auto;
-  border-radius: 50%;
-  background: var(--was-running);
-  box-shadow: 0 0 0 3px var(--was-running-soft);
-}
 .was-sidebar-group { padding: 13px 0; border-top: 1px solid var(--was-line); }
 .was-workspace + .was-sidebar-group { border-top: 0; padding-top: 0; }
 .was-filter-heading { margin-bottom: 4px; }
@@ -557,9 +537,6 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--was-focus); outl
   color: var(--was-text-2);
   font-size: 12px;
 }
-.was-sidebar-footer button { margin-left: auto; }
-.was-connection-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--was-unknown); }
-.was-connection-dot.was-connected { background: var(--was-running); box-shadow: 0 0 0 3px var(--was-running-soft); }
 
 /* ---------- Main, header, stats ---------- */
 .was-main { min-width: 0; padding: 18px 24px 0; container-type: inline-size; container-name: was-main; }
@@ -889,6 +866,31 @@ h1
   letter-spacing: .03em;
 }
 .was-tree-columns > :last-child { text-align: right; }
+.was-tree-options { min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
+.was-tree-sort-note { margin-left: auto; color: var(--was-muted); font-size: 11px; }
+.was-sort-button
+{
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.was-sort-button:hover { color: var(--was-text); }
+.was-sort-button:focus-visible { outline: 2px solid var(--was-focus); outline-offset: -2px; border-radius: 4px; }
+.was-sort-button:last-child { justify-self: end; }
+.was-sort-button::after { content: ""; display: inline-block; min-width: 9px; }
+.was-sort-button[data-was-sort-state="asc"],
+.was-sort-button[data-was-sort-state="desc"] { color: var(--was-accent-strong); }
+.was-sort-button[data-was-sort-state="asc"]::after { content: "↑"; }
+.was-sort-button[data-was-sort-state="desc"]::after { content: "↓"; }
 .was-tree { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 .was-tree:focus-visible { outline-offset: -2px; border-radius: 2px; }
 .was-tree-spacer { width: 1px; pointer-events: none; }
@@ -1213,6 +1215,7 @@ h1
 /* ---------- Graph view ---------- */
 .was-graph-view { display: flex; flex-direction: column; height: 100%; }
 .was-graph-options,
+.was-tree-options,
 .was-office-toolbar
 {
   display: flex;
@@ -1914,6 +1917,11 @@ h1
   .was-message-item summary { grid-template-columns: minmax(0, 1fr) 64px; }
   .was-message-item .was-message-state { display: none; }
 }
+
+/* ---------- Detail panel collapsed ---------- */
+.was-detail-toggle[aria-expanded="false"] { color: var(--was-accent-strong); }
+.was-detail-collapsed:not(.was-presenting) .was-explorer { grid-template-columns: minmax(0, 1fr); }
+.was-detail-collapsed:not(.was-presenting) .was-detail { display: none; }
 
 /* ---------- Sidebar collapsed ---------- */
 .was-sidebar-collapsed .was-app { grid-template-columns: minmax(0, 1fr); }

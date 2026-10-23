@@ -893,6 +893,7 @@ function pageRuntime(languages)
   var elements = {};
   var storage = {};
   var span = fakeElement("span");
+  var detailSpan = fakeElement("span");
   runtime.elements = elements;
   runtime.storage = storage;
   runtime.navigator = { languages: languages };
@@ -923,6 +924,7 @@ function pageRuntime(languages)
         elements[id] = fakeElement(id === "was-locale" || /^was-(project|provider|activity|status|kind)$/.test(id) ? "select" : "div");
         if (id === "was-detail") elements[id].appendChild(fakeElement("div"));
         if (id === "was-sidebar-toggle") elements[id].querySelector = function () { return span; };
+        if (id === "was-detail-toggle") elements[id].querySelector = function () { return detailSpan; };
         if (id === "was-relation-filters") elements[id].querySelectorAll = function () { return ["management", "spawn", "dependency", "collaboration", "handoff"].map(function (value) { return { value: value }; }); };
       }
       return elements[id];
@@ -1129,6 +1131,7 @@ test("a stage graphics notice follows the language while a call description is d
     return target[key];
   } });
   elements.sidebarToggle = { querySelector: function () { return fakeElement(); } };
+  elements.detailToggle = { querySelector: function () { return fakeElement(); } };
   runtime.wasState.flowPulses = [];
   runtime.wasState.reducedMotion = { matches: false };
   runtime.wasRefreshLocale();
@@ -1312,6 +1315,7 @@ test("after a language change the stage rewrites its own text and receives fresh
     return target[key];
   } });
   elements.sidebarToggle = { querySelector: function () { return fakeElement(); } };
+  elements.detailToggle = { querySelector: function () { return fakeElement(); } };
   runtime.wasUpdateView = function () { calls.push("view"); };
   runtime.wasRenderHealth = function () { calls.push("health"); };
   runtime.wasRenderDiagnostics = function () { calls.push("diagnostics"); };
@@ -1360,4 +1364,182 @@ test("the floor list shows the top floor first while the data and the up / down 
   assert.deepEqual(options.map(function (option) { return option.textContent; }), ["3F · Gamma (1)", "2F · Beta (1)", "1F · Alpha (1)"]);
   assert.deepEqual(options.map(function (option) { return option.value; }), ["f3", "f2", "f1"]);
   assert.deepEqual(runtime.wasState.officeFloors.map(function (floor) { return floor.id; }), ["f1", "f2", "f3"], "the floor data keeps its order from 1F upward");
+});
+
+test("the detail panel toggle collapses and restores the panel, keeps its label and remembers the choice", function ()
+{
+  var runtime = startPage(["ko"]);
+  var toggle = runtime.elements["was-detail-toggle"];
+  var label = toggle.querySelector("span");
+  var bodyClasses = {};
+  runtime.document.body.classList.toggle = function (name, force) { bodyClasses[name] = force; };
+  assert.equal(runtime.wasState.detailCollapsed, false, "the panel starts open");
+  assert.equal(label.textContent, "상세 접기");
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+
+  toggle.dispatch("click");
+  assert.equal(runtime.wasState.detailCollapsed, true);
+  assert.equal(bodyClasses["was-detail-collapsed"], true);
+  assert.equal(toggle.attributes["aria-expanded"], "false");
+  assert.equal(label.textContent, "상세 펼치기");
+  assert.equal(runtime.storage.was_observatory_detail_collapsed, "1", "the choice is stored for the next visit");
+
+  runtime.WasI18n.setLocale("en");
+  runtime.wasRefreshLocale();
+  assert.equal(label.textContent, "Expand details", "the label follows the language while the panel is collapsed");
+
+  toggle.dispatch("click");
+  assert.equal(runtime.wasState.detailCollapsed, false);
+  assert.equal(bodyClasses["was-detail-collapsed"], false);
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(label.textContent, "Collapse details");
+  assert.equal(runtime.storage.was_observatory_detail_collapsed, "0");
+});
+
+test("a stored detail panel choice is restored when the page starts and storage failures are tolerated", function ()
+{
+  var collapsed = pageRuntime(["ko"]);
+  collapsed.storage.was_observatory_detail_collapsed = "1";
+  collapsed.wasInitialize();
+  assert.equal(collapsed.wasState.detailCollapsed, true);
+  assert.equal(collapsed.elements["was-detail-toggle"].attributes["aria-expanded"], "false");
+
+  var blocked = pageRuntime(["ko"]);
+  blocked.localStorage = { getItem: function () { throw new Error("blocked"); }, setItem: function () { throw new Error("blocked"); } };
+  blocked.wasInitialize();
+  assert.equal(blocked.wasState.detailCollapsed, false, "without storage the panel stays open");
+  blocked.elements["was-detail-toggle"].dispatch("click");
+  assert.equal(blocked.wasState.detailCollapsed, true, "a failed save does not stop the toggle");
+});
+
+function sortText(runtime)
+{
+  return runtime.wasState.sort.key + ":" + runtime.wasState.sort.direction;
+}
+
+function sortedIds(model, sort, expanded, extra)
+{
+  return frontend.wasBuildView(model, filters(extra), expanded || new Set(), null, sort).rows.map(function (row) { return row.id; });
+}
+
+test("sorting by status orders siblings by the status rank and breaks ties by the newest observation", function ()
+{
+  var nodes = [
+    node("idle-one", { status: "idle", lastSeen: minutesAgo(10) }),
+    node("working-old", { status: "running", lastSeen: minutesAgo(40) }),
+    node("waiting-one", { status: "waiting", lastSeen: minutesAgo(5) }),
+    node("unknown-one", { status: "unknown", lastSeen: minutesAgo(1) }),
+    node("completed-one", { status: "completed", lastSeen: minutesAgo(2) }),
+    node("stopped-one", { status: "interrupted", lastSeen: minutesAgo(3) }),
+    node("working-new", { status: "running", lastSeen: minutesAgo(20) })
+  ];
+  var model = frontend.wasBuildModel({ nodes: nodes, edges: [] });
+  assert.deepEqual(sortedIds(model, { key: "status", direction: "asc" }), ["working-new", "working-old", "waiting-one", "stopped-one", "unknown-one", "idle-one", "completed-one"]);
+  assert.deepEqual(sortedIds(model, { key: "status", direction: "desc" }), ["completed-one", "idle-one", "unknown-one", "stopped-one", "waiting-one", "working-new", "working-old"], "the status order reverses while ties still show the newest first");
+});
+
+test("sorting reorders the children under each parent and keeps the position numbers of the rows consistent", function ()
+{
+  var nodes = [
+    node("parent", { status: "running", lastSeen: minutesAgo(1) }),
+    node("child-idle", { status: "idle", lastSeen: minutesAgo(2) }),
+    node("child-working", { status: "running", lastSeen: minutesAgo(30) }),
+    node("child-waiting", { status: "waiting", lastSeen: minutesAgo(20) })
+  ];
+  var edges = ["child-idle", "child-working", "child-waiting"].map(function (id) { return edge("e-" + id, "parent", id); });
+  var model = frontend.wasBuildModel({ nodes: nodes, edges: edges });
+  var view = frontend.wasBuildView(model, filters(), new Set(["parent"]), null, { key: "status", direction: "asc" });
+  assert.deepEqual(view.rows.map(function (row) { return row.id; }), ["parent", "child-working", "child-waiting", "child-idle"]);
+  assert.deepEqual(view.rows.slice(1).map(function (row) { return row.position + "/" + row.size; }), ["1/3", "2/3", "3/3"]);
+  assert.deepEqual(view.rows[0].children, ["child-working", "child-waiting", "child-idle"]);
+});
+
+test("sorting by name is natural and sorting by last observed can run oldest first", function ()
+{
+  var nodes = [
+    node("dev10", { lastSeen: minutesAgo(5) }),
+    node("dev2", { lastSeen: minutesAgo(50) }),
+    node("Alpha", { lastSeen: minutesAgo(20) })
+  ];
+  var model = frontend.wasBuildModel({ nodes: nodes, edges: [] });
+  assert.deepEqual(sortedIds(model, { key: "name", direction: "asc" }), ["Alpha", "dev2", "dev10"], "numbers inside names compare as numbers");
+  assert.deepEqual(sortedIds(model, { key: "name", direction: "desc" }), ["dev10", "dev2", "Alpha"]);
+  assert.deepEqual(sortedIds(model, { key: "recent", direction: "desc" }), ["dev10", "Alpha", "dev2"]);
+  assert.deepEqual(sortedIds(model, { key: "recent", direction: "asc" }), ["dev2", "Alpha", "dev10"]);
+});
+
+test("the default sort and an unusable sort leave the model order untouched", function ()
+{
+  var nodes = [node("a", { lastSeen: minutesAgo(30) }), node("b", { lastSeen: minutesAgo(3) }), node("c", { lastSeen: minutesAgo(12) })];
+  var model = frontend.wasBuildModel({ nodes: nodes, edges: [] });
+  var plain = sortedIds(model, undefined);
+  assert.deepEqual(plain, ["b", "c", "a"], "newest first is the model order");
+  assert.deepEqual(sortedIds(model, { key: "recent", direction: "desc" }), plain);
+  assert.deepEqual(sortedIds(model, { key: "nonsense", direction: "asc" }), plain);
+  assert.deepEqual(sortedIds(model, { key: "status", direction: "sideways" }), plain);
+  assert.deepEqual(frontend.wasParseSort("status:desc"), { key: "status", direction: "desc" });
+  assert.equal(frontend.wasParseSort("status"), null);
+  assert.equal(frontend.wasParseSort(undefined), null);
+});
+
+test("the sort select and the column headers share one choice that is announced, shown and remembered", function ()
+{
+  var runtime = pageRuntime(["ko"]);
+  var buttons = ["name", "status", "recent"].map(function (key)
+  {
+    var button = fakeElement("button");
+    button.attributes["data-was-sort"] = key;
+    return button;
+  });
+  runtime.wasInitialize();
+  var select = runtime.elements["was-tree-sort"];
+  var columns = runtime.elements["was-tree-columns"];
+  columns.querySelectorAll = function () { return buttons; };
+  var clicked = null;
+  columns.closest = function () { return clicked; };
+  assert.equal(sortText(runtime), "recent:desc", "the list starts newest first");
+
+  select.value = "status:asc";
+  select.dispatch("change");
+  assert.equal(sortText(runtime), "status:asc");
+  assert.equal(buttons[1].attributes["data-was-sort-state"], "asc");
+  assert.equal(buttons[0].attributes["data-was-sort-state"], "none");
+  assert.equal(buttons[2].attributes["aria-pressed"], "false");
+  assert.equal(runtime.elements["was-announcement"].textContent, "정렬 기준: 상태 · 작업 중 먼저");
+
+  clicked = buttons[1];
+  columns.dispatch("click");
+  assert.equal(select.value, "status:desc", "a second click on the same column reverses it");
+  clicked = buttons[0];
+  columns.dispatch("click");
+  assert.equal(select.value, "name:asc", "another column starts with its own first direction");
+  clicked = buttons[2];
+  columns.dispatch("click");
+  assert.equal(select.value, "recent:desc");
+
+  select.value = "garbage";
+  select.dispatch("change");
+  assert.equal(sortText(runtime), "recent:desc", "an unknown value is ignored");
+});
+
+test("a remembered sort is restored when the page starts and is part of the saved preferences", function ()
+{
+  var saved = pageRuntime(["ko"]);
+  saved.sessionStorage = { getItem: function () { return JSON.stringify({ sort: "name:desc", view: "tree" }); }, setItem: function () {} };
+  saved.wasInitialize();
+  assert.equal(sortText(saved), "name:desc");
+  assert.equal(saved.elements["was-tree-sort"].value, "name:desc");
+
+  var garbled = pageRuntime(["ko"]);
+  garbled.sessionStorage = { getItem: function () { return JSON.stringify({ sort: "name" }); }, setItem: function () {} };
+  garbled.wasInitialize();
+  assert.equal(sortText(garbled), "recent:desc", "a malformed value keeps the default");
+
+  var writes = [];
+  var live = pageRuntime(["ko"]);
+  live.sessionStorage = { getItem: function () { return null; }, setItem: function (key, value) { writes.push(JSON.parse(value)); } };
+  live.wasInitialize();
+  live.wasState.sort = { key: "status", direction: "desc" };
+  live.wasSavePreferences();
+  assert.equal(writes[writes.length - 1].sort, "status:desc");
 });

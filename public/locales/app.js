@@ -119,6 +119,7 @@
 
       "app.announce.selected": "{name} selected",
       "app.announce.detailClosed": "Details closed",
+      "app.announce.sorted": "Sorted by {order}",
       "app.announce.forcedExpanded": "Ancestor sessions are expanded automatically so the search results stay visible. Clear the search and status filters to collapse them.",
       "app.announce.collapseBlocked": "Ancestors of search results stay expanded. Clear the search and status filters to collapse every branch.",
       "app.announce.connectionSelected": "Connection between sessions selected. See the details for deliveries by direction and the original evidence.",
@@ -269,10 +270,9 @@
 
       "app.sidebar.expand": "Expand filters",
       "app.sidebar.collapse": "Collapse filters",
+      "app.detail.expandPanel": "Expand details",
+      "app.detail.collapsePanel": "Collapse details",
 
-      "app.health.snapshotFailed": "Snapshot request failed",
-      "app.health.connected": "Connected live",
-      "app.health.reconnecting": "Reconnecting · checking automatically",
       "app.health.badgeCheck": "Check connection",
       "app.health.badgePartial": "Collecting · partial data",
       "app.health.badgeLive": "Live observation",
@@ -407,6 +407,7 @@
 
       "app.announce.selected": "{name} 선택됨",
       "app.announce.detailClosed": "상세 닫음",
+      "app.announce.sorted": "정렬 기준: {order}",
       "app.announce.forcedExpanded": "검색 결과가 보이도록 조상 세션을 자동으로 펼치고 있습니다. 검색·상태 필터를 해제하면 접을 수 있습니다.",
       "app.announce.collapseBlocked": "검색 결과의 조상은 계속 펼쳐집니다. 검색과 상태 필터를 해제하면 모든 분기를 접을 수 있습니다.",
       "app.announce.connectionSelected": "세션 간 연결 선택됨. 상세에서 방향별 전달과 원본 근거를 확인하세요.",
@@ -545,10 +546,9 @@
 
       "app.sidebar.expand": "필터 펼치기",
       "app.sidebar.collapse": "필터 접기",
+      "app.detail.expandPanel": "상세 펼치기",
+      "app.detail.collapsePanel": "상세 접기",
 
-      "app.health.snapshotFailed": "스냅샷 조회 실패",
-      "app.health.connected": "실시간 연결됨",
-      "app.health.reconnecting": "재연결 중 · 자동 확인",
       "app.health.badgeCheck": "연결 확인 필요",
       "app.health.badgePartial": "수집 중 · 일부 데이터",
       "app.health.badgeLive": "실시간 관측",
