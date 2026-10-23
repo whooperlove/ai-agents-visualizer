@@ -78,11 +78,6 @@ function wasActivityName(category)
   return wasKnownLabel("app.activity", category) || wasText(category);
 }
 
-function wasTravelNote()
-{
-  return wasT("app.travel.note");
-}
-
 function wasGetActivity(node, now)
 {
   if (node.archived)
@@ -1602,19 +1597,21 @@ function wasFindNoticeKey(text)
   return Object.keys(catalog).filter(function (key) { return key.indexOf("scene.fallback.") === 0 && catalog[key] === text; })[0] || "";
 }
 
+/* The line under the stage only speaks when there is something to say: a skipped animation, a call in progress or a graphics notice. */
 function wasRenderOfficeTravel()
 {
   var travel = wasState.officeTravel || { kind: "note", info: null };
-  var text = wasTravelNote();
+  var text = "";
   if (travel.kind === "reduced")
   {
-    text += " · " + wasT("app.travel.reducedMotion");
+    text = wasT("app.travel.reducedMotion");
   }
   else if (travel.kind === "scene" && travel.info)
   {
-    text = !travel.info.illustrative ? (travel.noticeKey ? wasT(travel.noticeKey) : travel.info.text) : travel.info.phase === "done" ? text : text + " · " + travel.info.text;
+    text = !travel.info.illustrative ? (travel.noticeKey ? wasT(travel.noticeKey) : travel.info.text) : travel.info.phase === "done" ? "" : travel.info.text;
   }
   wasElements.officeTravel.textContent = text;
+  wasElements.officeTravel.classList.toggle("was-travel-idle", !text);
 }
 
 function wasResizeOfficeAfterLayout(fit)

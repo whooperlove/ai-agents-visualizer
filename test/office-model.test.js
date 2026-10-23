@@ -367,3 +367,49 @@ Test("floor names taken from records cannot forge a message token", function ()
   var project = Office.buildOffice({ nodes: [node("a", { project: forged })], edges: [] }, { project: forged, activity: "all", groupFloors: false });
   Assert.equal(I18n.resolve(project.floors[0].name, "en"), "[scene.floor.independent]");
 });
+
+Test("floors run teams first, spawn trees next and the independent floor last, whatever the id order is", function ()
+{
+  var nodes = [node("a-solo"), node("m-boss"), node("n-member"), node("z-root"), node("z-child", { kind: "agent" })];
+  var edges = [edge("m-boss", "n-member", "management"), edge("z-root", "z-child", "spawn")];
+  var office = build(nodes, edges);
+  Assert.equal(office.floors.length, 3);
+  Assert.equal(office.floors[0].managerId, "m-boss");
+  Assert.match(office.floors[1].id, /:native:/);
+  Assert.match(office.floors[2].id, /:independent$/);
+  var reversed = build(nodes.slice().reverse(), edges.slice().reverse());
+  Assert.deepEqual(reversed.floors.map(function (floor) { return floor.id; }), office.floors.map(function (floor) { return floor.id; }));
+});
+
+Test("a lone session of a spawn tree joins the independent floor, while a tree with two sessions on show keeps its own", function ()
+{
+  var nodes = [node("root-1"), node("child-1", { kind: "agent" }), node("root-2"), node("child-2", { kind: "agent", status: "completed", activity: { category: "inactive" } }), node("solo")];
+  var edges = [edge("root-1", "child-1", "spawn"), edge("root-2", "child-2", "spawn")];
+  var office = build(nodes, edges, { activity: "recent", showQuiet: false });
+  Assert.equal(office.floors.length, 2, "one tree floor and one independent floor");
+  Assert.match(office.floors[0].id, /:native:/);
+  Assert.match(office.floors[1].id, /:independent$/);
+  Assert.deepEqual(office.floors[0].nodeIds, ["root-1", "child-1"]);
+  Assert.equal(office.actorById.get("root-2").floorId, office.actorById.get("solo").floorId, "the tree whose other session is hidden shares the independent floor");
+  Assert.equal(office.actorById.has("child-2"), false);
+  Assert.equal(office.floors[1].hiddenCount, 1, "the hidden session is counted on the floor its root moved to");
+  Assert.equal(office.actorById.get("root-2").homeFloorId, office.floors[1].id);
+});
+
+Test("seats group what belongs together: managers first, tree levels in order and sessions of one project side by side", function ()
+{
+  var nodes = [node("zz-boss"), node("a-1"), node("b-2"), node("r"), node("c-2", { kind: "agent" }), node("c-1", { kind: "agent" }), node("a-grand", { kind: "agent" }),
+    node("x1", { project: "beta" }), node("x2", { project: "alpha" }), node("x3", { project: "beta" }), node("x4", { project: "alpha" })];
+  var edges = [edge("zz-boss", "a-1", "management"), edge("zz-boss", "b-2", "management"), edge("r", "c-1", "spawn"), edge("r", "c-2", "spawn"), edge("c-1", "a-grand", "spawn")];
+  var office = build(nodes, edges, { project: "" });
+  Assert.deepEqual(office.floors[0].nodeIds, ["zz-boss", "a-1", "b-2"], "the manager sits first");
+  Assert.deepEqual(office.floors[1].nodeIds, ["r", "c-1", "c-2", "a-grand"], "the root, then its children, then their children");
+  Assert.deepEqual(office.floors[2].nodeIds, ["x2", "x4", "x1", "x3"], "one project after the other");
+  office.floors.forEach(function (floor)
+  {
+    floor.nodeIds.forEach(function (id, index) { Assert.equal(office.actorById.get(id).seatIndex, index, id); });
+  });
+  var flat = build(nodes, edges, { project: "", groupFloors: false });
+  Assert.deepEqual(flat.floors[0].nodeIds, [].concat(office.floors[0].nodeIds, office.floors[1].nodeIds, office.floors[2].nodeIds), "the flat view keeps the same grouping");
+  flat.floors[0].nodeIds.forEach(function (id, index) { Assert.equal(flat.actorById.get(id).seatIndex, index, id); });
+});

@@ -141,6 +141,8 @@ function createBrowserHarness(settings)
     return result;
   }
   var document = eventTarget({ hidden: false, createElement: element });
+  var hasFocus = settings.focused !== false;
+  document.hasFocus = function () { return hasFocus; };
   var media = eventTarget({ matches: !!settings.reduced });
   var sandbox = eventTarget({ Map: Map, Set: Set, Math: Math, Number: Number, Float32Array: Float32Array,
     Date: { now: function () { return currentTime; } }, document: document, WasOfficeModel: OfficeModel, devicePixelRatio: 2,
@@ -160,6 +162,7 @@ function createBrowserHarness(settings)
     graphics: graphics, backingWrites: function () { return backingWrites; }, listenerCount: function () { return listenerCount; },
     setLocale: function (locale) { sandbox.WasI18n.setLocale(locale); },
     advanceTime: function (amount) { currentTime += amount; },
+    setFocus: function (value) { hasFocus = !!value; sandbox.dispatch(value ? 'focus' : 'blur'); },
     runTimers: function ()
     {
       var entries = Array.from(timers.entries());
@@ -217,7 +220,7 @@ function count(browser, method)
   return browser.graphics.filter(function (call) { return call.method === method; }).length;
 }
 
-Test('WebGL shares one indexed mesh across characters, furniture and frames, and idle frames stop', function ()
+Test('WebGL shares one indexed mesh across characters, furniture and frames, and never queues more than one frame loop', function ()
 {
   var browser = createBrowserHarness();
   var scene = browser.renderer.create({ container: browser.container });
@@ -228,7 +231,7 @@ Test('WebGL shares one indexed mesh across characters, furniture and frames, and
   Assert.ok(count(browser, 'drawElements') > 50);
   Assert.equal(count(browser, 'createBuffer'), 2);
   Assert.equal(scene.getState().bufferCount, 2);
-  Assert.equal(browser.pending.size, 0);
+  Assert.equal(browser.pending.size, 1, 'the characters keep one ambient frame loop');
   var crowd = officeWithActors(Array.from({ length: 30 }, function (_, index) { return actor('crowd-' + index, { seatIndex: index, status: index % 3 ? 'idle' : 'waiting' }); }));
   scene.setOffice(crowd);
   browser.flush();
@@ -236,11 +239,12 @@ Test('WebGL shares one indexed mesh across characters, furniture and frames, and
   browser.flush();
   Assert.equal(count(browser, 'createBuffer'), 2);
   Assert.equal(count(browser, 'createTexture'), 1);
-  Assert.equal(browser.pending.size, 0);
+  Assert.equal(browser.pending.size, 1, 'panning and new snapshots reuse that single loop');
   Assert.equal(scene.getState().yaw, 0);
   Assert.equal(scene.getState().fixedCamera, true);
   Assert.equal(scene.setMode('2d'), '2d');
   scene.destroy();
+  Assert.equal(browser.pending.size, 0, 'destroying the stage cancels its frame loop');
   Assert.equal(count(browser, 'deleteBuffer'), 2);
   Assert.equal(count(browser, 'deleteProgram'), 2);
   Assert.equal(count(browser, 'deleteTexture'), 1);
@@ -310,7 +314,7 @@ Test('same-size resize and repeated snapshots preserve backing buffers and label
   var writes = browser.backingWrites();
   scene.resize(); scene.resize();
   Assert.equal(browser.backingWrites(), writes);
-  Assert.equal(browser.pending.size, 0);
+  Assert.ok(browser.pending.size <= 1, 'resizing never queues a second frame loop');
   scene.setOffice(office);
   browser.flush();
   Assert.equal(layer.children[0], label);
@@ -488,6 +492,112 @@ Test('a name tag is as wide as its measured wider row, and the name estimate sta
   plain.flush();
   Assert.equal(labelFor(plain, 'c').style.width, Math.max(156, 'codex-project-c'.length * 7 + 46) + 'px', 'without layout the estimate from the name is used');
   fallback.destroy();
+});
+
+Test('characters on stage keep one paced ambient frame loop, while an empty stage or reduced motion draws no frames', function ()
+{
+  var browser = createBrowserHarness();
+  var scene = browser.renderer.create({ container: browser.container });
+  scene.setOffice(makeOffice());
+  browser.flush();
+  Assert.equal(browser.pending.size, 1, 'idle characters still breathe, blink and sip, so the loop continues');
+  Assert.equal(scene.getState().pendingFrame, true);
+  browser.flush();
+  browser.flush();
+  Assert.equal(browser.pending.size, 1, 'running the loop never stacks frames');
+  scene.setMotion(false);
+  browser.flush();
+  Assert.equal(browser.pending.size, 0, 'with motion off the stage is a still image');
+  scene.setMotion(true);
+  browser.flush();
+  Assert.equal(browser.pending.size, 1, 'turning motion back on resumes the loop');
+  scene.setOffice(officeWithActors([]));
+  browser.flush();
+  Assert.equal(browser.pending.size, 0, 'a stage with no characters draws nothing');
+  scene.destroy();
+});
+
+Test('the stage redraws about 30 times a second in the focused window and draws nothing in between without the focus', function ()
+{
+  var browser = createBrowserHarness();
+  var scene = browser.renderer.create({ container: browser.container });
+  scene.setOffice(makeOffice());
+  browser.flush();
+  function drawsIn(milliseconds)
+  {
+    var start = scene.getState().frameCount;
+    for (var elapsed = 0; elapsed < milliseconds; elapsed += 16)
+    {
+      browser.advanceTime(16);
+      browser.flush();
+    }
+    return scene.getState().frameCount - start;
+  }
+  var active = drawsIn(1000);
+  Assert.ok(active >= 26 && active <= 32, 'about 30 a second with the focus: ' + active);
+  browser.setFocus(false);
+  Assert.equal(drawsIn(2000), 0, 'no in-between frames without the focus');
+  Assert.equal(browser.pending.size, 0, 'and no frame loop is left running');
+  var before = scene.getState().frameCount;
+  scene.pan(0.1);
+  browser.flush();
+  Assert.equal(scene.getState().frameCount, before + 1, 'a pan still draws at once, exactly once');
+  Assert.equal(browser.pending.size, 0);
+  before = scene.getState().frameCount;
+  browser.setFocus(true);
+  browser.flush();
+  Assert.equal(scene.getState().frameCount, before + 1, 'regaining the focus draws at once');
+  Assert.equal(browser.pending.size, 1, 'and the ambient loop resumes');
+  var resumed = drawsIn(1000);
+  Assert.ok(resumed >= 26 && resumed <= 32, 'about 30 a second again: ' + resumed);
+  scene.destroy();
+  Assert.equal(browser.listenerCount(), 0, 'the focus listeners are released with the stage');
+});
+
+Test('a window without the focus shows a state change at once, with no walk in between, and walks again with the focus', function ()
+{
+  function seatMove(focused)
+  {
+    var browser = createBrowserHarness({ focused: focused });
+    var scene = browser.renderer.create({ container: browser.container });
+    var office = makeOffice();
+    office.actorById.get('c').context = true;
+    scene.setOffice(office);
+    browser.flush();
+    var before = scene.getState().positions.find(function (entry) { return entry.id === 'c'; });
+    scene.setOffice(officeWithActors(office.actors.map(function (entry)
+    {
+      return entry.id === 'c' ? Object.assign({}, entry, { activity: { category: 'inactive' } }) : entry;
+    })));
+    browser.flush();
+    var after = scene.getState().positions.find(function (entry) { return entry.id === 'c'; });
+    scene.destroy();
+    return { before: before, after: after };
+  }
+  var background = seatMove(false);
+  Assert.equal(background.after.seated, true, 'the actor is on the sofa in the very next frame');
+  Assert.equal(background.after.zone, 'rest');
+  Assert.notEqual(background.after.x, background.before.x);
+  var active = seatMove(true);
+  Assert.equal(active.after.x, active.before.x, 'with the focus the same change starts a walk instead of jumping');
+});
+
+Test('a stage that starts in a window without the focus draws once and then stays still', function ()
+{
+  var browser = createBrowserHarness({ focused: false });
+  var scene = browser.renderer.create({ container: browser.container });
+  scene.setOffice(makeOffice());
+  browser.flush();
+  Assert.ok(count(browser, 'drawElements') > 50, 'the first state is drawn');
+  var drawn = scene.getState().frameCount;
+  for (var elapsed = 0; elapsed < 1000; elapsed += 16)
+  {
+    browser.advanceTime(16);
+    browser.flush();
+  }
+  Assert.equal(scene.getState().frameCount, drawn, 'nothing is drawn while the window stays unfocused');
+  Assert.equal(browser.pending.size, 0);
+  scene.destroy();
 });
 
 Test('shift and wheel switch floors one at a time and the stage names the current floor', function ()

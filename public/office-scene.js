@@ -25,6 +25,9 @@ var WasOfficeScene = null;
   var PARTNER_AGE_STEP = 1000;
   var ANCHOR_TOP = 2.74;
   var SHADOW_SIZE = 2048;
+  /* Least time between two redraws that nothing asked for: about 30 frames a second. A window without the focus and a hidden
+     tab draw no in-between frames at all: the stage redraws only when something changes, and shows the new state at once. */
+  var ACTIVE_FRAME_GAP = 30;
   /* Frames per second the characters are posed at, like stop-motion clay. 0 keeps the motion smooth. */
   var STOP_MOTION_FPS = 0;
   var LIGHT = { direction: [-0.3, 0.9, 0.78], color: [2.1, 1.84, 1.5], sky: [0.42, 0.35, 0.36], ground: [0.34, 0.25, 0.18],
@@ -862,7 +865,7 @@ var WasOfficeScene = null;
     var tops = new Map();
     var facings = new Map();
     var lastFrameAt = 0;
-    var ambientOnly = false;
+    var focused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
     var selectedAt = 0;
     var positions = new Map();
     var transitions = new Map();
@@ -997,7 +1000,7 @@ var WasOfficeScene = null;
 
     function motionAllowed()
     {
-      return motion && !reduced && visible && !document.hidden;
+      return motion && !reduced && focused && visible && !document.hidden;
     }
 
     function notifyTravel(info)
@@ -2330,7 +2333,8 @@ var WasOfficeScene = null;
       frame = null;
       if (destroyed || !visible || document.hidden || contextLost) return;
       timestamp = now();
-      if (!dirty && ambientOnly && timestamp - lastFrameAt < 30)
+      if (!focused && !dirty) return;
+      if (!dirty && timestamp - lastFrameAt < ACTIVE_FRAME_GAP)
       {
         frame = requestAnimationFrame(draw);
         return;
@@ -2424,9 +2428,9 @@ var WasOfficeScene = null;
       frameCount += 1;
       dirty = false;
       var lively = calls.length || transitions.size || turning || waving;
-      var typing = renderedActors.some(function (id) { return running(office.actorById.get(id)); });
-      var animate = motionAllowed() && (lively || typing);
-      ambientOnly = !!(animate && !lively);
+      /* Characters breathe, blink and sip even when nothing else moves, so any character on stage keeps the loop running,
+         paced by the frame gap above; an empty stage, or a window without the focus, stays a still image. */
+      var animate = motionAllowed() && (lively || renderedActors.length > 0);
       if (animate) frame = requestAnimationFrame(draw);
     }
 
@@ -2868,6 +2872,12 @@ var WasOfficeScene = null;
       else requestDraw();
     }
 
+    function didFocusChange()
+    {
+      focused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
+      if (focused) requestDraw();
+    }
+
     function didReducedMotionChange(event)
     {
       reduced = !!event.matches;
@@ -2956,6 +2966,11 @@ var WasOfficeScene = null;
       requestDraw();
     });
     listen(document, 'visibilitychange', didVisibilityChange);
+    if (typeof window !== 'undefined')
+    {
+      listen(window, 'focus', didFocusChange);
+      listen(window, 'blur', didFocusChange);
+    }
     if (media && media.addEventListener) listen(media, 'change', didReducedMotionChange);
     else if (media && media.addListener) media.addListener(didReducedMotionChange);
     if (typeof ResizeObserver === 'function')

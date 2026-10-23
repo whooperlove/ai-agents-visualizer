@@ -15,8 +15,11 @@ var frontend = require("../public/app.js");
 function runtimeElement(value)
 {
   var events = new Map();
+  var classes = new Set();
   return {
     value: value || "", checked: true, textContent: "", scrollTop: 0, children: [],
+    classList: { add: function (name) { classes.add(name); }, remove: function (name) { classes.delete(name); }, contains: function (name) { return classes.has(name); },
+      toggle: function (name, force) { if (force === undefined ? !classes.has(name) : force) classes.add(name); else classes.delete(name); } },
     appendChild: function (child)
     {
       this.children.push(child);
@@ -285,7 +288,8 @@ test("each phone replay tick rechecks the current endpoint, relation layer and a
     runtime.wasReplayNext();
     assert.equal(runtime.wasState.replayStatus, null);
     assert.equal(runtime.wasState.flowPulses.length, 0);
-    assert.equal(runtime.wasElements.officeTravel.textContent, "기록 기반 · 실제 통화 아님", "a stopped replay returns the note to its plain form");
+    assert.equal(runtime.wasElements.officeTravel.textContent, "", "a stopped replay leaves the line empty");
+    assert.equal(runtime.wasElements.officeTravel.classList.contains("was-travel-idle"), true, "an empty line is marked empty");
   });
 });
 
@@ -316,9 +320,11 @@ test("the stage keeps one bottom note for phone movements and page cleanup prese
   runtime.clearTimeout = function () {};
   runtime.wasEnsureOffice();
   options.onTravel({ text: "a → b", phase: "outgoing", replay: false, illustrative: true });
-  assert.equal(runtime.wasElements.officeTravel.textContent, "기록 기반 · 실제 통화 아님 · a → b");
+  assert.equal(runtime.wasElements.officeTravel.textContent, "a → b");
+  assert.equal(runtime.wasElements.officeTravel.classList.contains("was-travel-idle"), false, "a call in progress shows its line");
   options.onTravel({ text: "a → b", phase: "done", replay: true, illustrative: true });
-  assert.equal(runtime.wasElements.officeTravel.textContent, "기록 기반 · 실제 통화 아님", "a finished movement returns to the plain note");
+  assert.equal(runtime.wasElements.officeTravel.textContent, "", "a finished movement empties the line");
+  assert.equal(runtime.wasElements.officeTravel.classList.contains("was-travel-idle"), true);
   options.onTravel({ text: "WebGL을 쓸 수 없습니다.", phase: "fallback", illustrative: false });
   assert.equal(runtime.wasElements.officeTravel.textContent, "WebGL을 쓸 수 없습니다.", "other notices are shown as they are");
   runtime.wasDestroyOffice();
@@ -1404,7 +1410,7 @@ test("numbers and dates follow the active language and degrade without a catalog
   assert.equal(english.wasDateTime("nope"), "Not recorded");
   var plain = { console: console };
   vm.runInNewContext(fs.readFileSync(require.resolve("../public/app.js"), "utf8") + "\nthis.t = wasT; this.n = wasFormatNumber; this.r = wasResolveText; this.k = wasStatusName;", plain);
-  assert.equal(plain.t("app.travel.note"), "app.travel.note", "without a catalog the key comes back and nothing throws");
+  assert.equal(plain.t("app.travel.reducedMotion"), "app.travel.reducedMotion", "without a catalog the key comes back and nothing throws");
   assert.equal(plain.n(1234), "1,234");
   assert.equal(plain.r("plain"), "plain");
   assert.equal(plain.k("running"), "running");
@@ -1483,9 +1489,9 @@ test("the character cards, the stage note and the close button use the active la
   english.wasElements = { officeTravel: runtimeElement() };
   english.wasState.officeTravel = null;
   english.wasRenderOfficeTravel();
-  assert.equal(english.wasElements.officeTravel.textContent, "Record-based · not a real call");
+  assert.equal(english.wasElements.officeTravel.textContent, "");
   english.wasSetOfficeTravel("reduced");
-  assert.equal(english.wasElements.officeTravel.textContent, "Record-based · not a real call · The call animation was skipped because of the reduced-motion setting.");
+  assert.equal(english.wasElements.officeTravel.textContent, "The call animation was skipped because of the reduced-motion setting.");
   var button = english.wasCreateDetailClose();
   assert.equal(button.title, "Close details");
 });
@@ -1517,7 +1523,7 @@ test("a stage graphics notice follows the language while a call description is d
   assert.match(runtime.wasElements.officeTravel.textContent, HANGUL);
   assert.equal(runtime.wasElements.officeTravel.textContent, runtime.WasI18n.t("scene.fallback.webglUnavailable"));
   options.onTravel({ text: "a → b", phase: "outgoing", replay: false, illustrative: true });
-  assert.equal(runtime.wasElements.officeTravel.textContent, "기록 기반 · 실제 통화 아님 · a → b");
+  assert.equal(runtime.wasElements.officeTravel.textContent, "a → b");
   runtime.WasI18n.setLocale("en");
   runtime.wasState.replayStatus = null;
   runtime.wasElements = new Proxy(elements, { get: function (target, key)
@@ -1530,7 +1536,7 @@ test("a stage graphics notice follows the language while a call description is d
   runtime.wasState.flowPulses = [];
   runtime.wasState.reducedMotion = { matches: false };
   runtime.wasRefreshLocale();
-  assert.equal(elements.officeTravel.textContent, "Record-based · not a real call", "a transient call description is not kept across a language change");
+  assert.equal(elements.officeTravel.textContent, "", "a transient call description is not kept across a language change");
 });
 
 test("floor labels render the message tokens of the office model and rebuild when the language changes", function ()
@@ -1938,4 +1944,17 @@ test("a remembered sort is restored when the page starts and is part of the save
   live.wasState.sort = { key: "status", direction: "desc" };
   live.wasSavePreferences();
   assert.equal(writes[writes.length - 1].sort, "status:desc");
+});
+
+test("the status line under the stage keeps its height when it is empty, so a call starting or ending never resizes the stage", function ()
+{
+  var css = fs.readFileSync(require.resolve("../public/styles.css"), "utf8");
+  var hidden = css.slice(css.indexOf(".was-office-travel.was-travel-idle"));
+  hidden = hidden.slice(0, hidden.indexOf("}"));
+  assert.match(hidden, /visibility: hidden;/);
+  assert.doesNotMatch(hidden, /display: none/, "removing the line from the layout would resize the stage and redraw the canvas");
+  assert.match(fs.readFileSync(require.resolve("../public/index.html"), "utf8"), /id="was-office-travel" class="was-office-travel was-travel-idle"/, "the line starts empty");
+  var line = css.slice(css.indexOf(".was-office-travel\n{"));
+  line = line.slice(0, line.indexOf("}"));
+  assert.match(line, /min-height: calc\(1\.55em \+ 17px\);/, "an empty line is as tall as a line with text");
 });

@@ -62,7 +62,6 @@
       "app.messageKind.unknown": "Type unknown",
       "app.messageKind.record": "Delivery record",
 
-      "app.travel.note": "Record-based · not a real call",
       "app.travel.reducedMotion": "The call animation was skipped because of the reduced-motion setting.",
 
       "app.node.unresolvedName": "Unresolved target · {id}",
@@ -356,7 +355,6 @@
       "app.messageKind.unknown": "유형 미확인",
       "app.messageKind.record": "전달 기록",
 
-      "app.travel.note": "기록 기반 · 실제 통화 아님",
       "app.travel.reducedMotion": "동작 줄이기 설정으로 전화 동작을 생략했습니다.",
 
       "app.node.unresolvedName": "미확인 대상 · {id}",

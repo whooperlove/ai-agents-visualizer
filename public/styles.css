@@ -1496,6 +1496,7 @@ h1
 {
   display: flex;
   flex-shrink: 0;
+  min-height: calc(1.55em + 17px);
   align-items: flex-start;
   gap: 8px;
   padding: 8px 14px;
@@ -1504,6 +1505,12 @@ h1
   color: var(--was-text-2);
   font-size: 12px;
   line-height: 1.55;
+}
+/* An empty line keeps its place, so the stage never changes height when a call starts or ends; a resize would redraw the canvas.
+   The hidden attribute cannot do this here: the page resets it to display: none. */
+.was-office-travel.was-travel-idle
+{
+  visibility: hidden;
 }
 .was-office-travel::before
 {

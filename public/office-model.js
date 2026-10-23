@@ -341,6 +341,41 @@ function wasOfficeBuildOffice(snapshot, options)
       }
     });
   }
+  /* A tree of spawned sessions earns a floor of its own only while at least two of its sessions are on show; a lone one
+     belongs with the other independent sessions. Floors then run teams first, trees next and the independent floor last,
+     whatever the order of the session ids was. */
+  var treePrefix = prefix + "native:";
+  var independentId = prefix + "independent";
+  var visibleInFloor = new Map();
+  ids.forEach(function (id)
+  {
+    if (included.has(id))
+    {
+      visibleInFloor.set(homeFloor.get(id), (visibleInFloor.get(homeFloor.get(id)) || 0) + 1);
+    }
+  });
+  var loneTrees = new Set(floors.filter(function (floor) { return floor.id.indexOf(treePrefix) === 0 && (visibleInFloor.get(floor.id) || 0) < 2; }).map(function (floor) { return floor.id; }));
+  if (loneTrees.size)
+  {
+    addFloor(independentId, wasOfficeMessage("scene.floor.independent"), null);
+    ids.forEach(function (id)
+    {
+      if (loneTrees.has(homeFloor.get(id)))
+      {
+        homeFloor.set(id, independentId);
+      }
+    });
+    floors = floors.filter(function (floor) { return !loneTrees.has(floor.id); });
+    loneTrees.forEach(function (floorId) { floorById.delete(floorId); });
+  }
+  function floorRank(floor)
+  {
+    return floor.id === independentId ? 2 : floor.id.indexOf(treePrefix) === 0 ? 1 : 0;
+  }
+  floors = floors.map(function (floor, index) { return { floor: floor, index: index }; }).sort(function (first, second)
+  {
+    return floorRank(first.floor) - floorRank(second.floor) || first.index - second.index;
+  }).map(function (entry) { return entry.floor; });
   var actors = [];
   var actorById = new Map();
   ids.forEach(function (id)
@@ -370,10 +405,53 @@ function wasOfficeBuildOffice(snapshot, options)
     actors.push(actor);
     actorById.set(id, actor);
   });
+  /* Seats group what belongs together: a team's manager first, a tree's root before its descendants level by level, then
+     sessions of one project side by side, then by name. */
+  var depth = new Map();
+  var queue = [];
+  actors.forEach(function (actor)
+  {
+    var home = homeFloor.get(actor.id);
+    var inFloor = (nativeParents.get(actor.id) || []).filter(function (parentId) { return included.has(parentId) && homeFloor.get(parentId) === home; });
+    if (home.indexOf(treePrefix) === 0 && !inFloor.length)
+    {
+      depth.set(actor.id, 0);
+      queue.push(actor.id);
+    }
+  });
+  for (var head = 0; head < queue.length; head += 1)
+  {
+    var parentId = queue[head];
+    (nativeChildren.get(parentId) || []).forEach(function (childId)
+    {
+      if (included.has(childId) && homeFloor.get(childId) === homeFloor.get(parentId) && !depth.has(childId))
+      {
+        depth.set(childId, depth.get(parentId) + 1);
+        queue.push(childId);
+      }
+    });
+  }
+  floors.forEach(function (floor)
+  {
+    var keys = new Map();
+    floor.nodeIds.forEach(function (id)
+    {
+      keys.set(id, [floor.managerId === id ? 0 : 1, depth.get(id) || 0, wasOfficeText(nodes.get(id).project).toLocaleLowerCase(), actorById.get(id).name.toLocaleLowerCase()]);
+    });
+    floor.nodeIds.sort(function (first, second)
+    {
+      var one = keys.get(first);
+      var two = keys.get(second);
+      return one[0] - two[0] || one[1] - two[1] || wasOfficeCompare(one[2], two[2]) || wasOfficeCompare(one[3], two[3]) || wasOfficeCompare(first, second);
+    });
+    floor.nodeIds.forEach(function (id, index) { actorById.get(id).seatIndex = index; });
+  });
   if (options.groupFloors === false && ids.length)
   {
     var merged = { id: prefix + "all", name: wasOfficeFloorName(project) || wasOfficeMessage("scene.floor.all"), managerId: null, nodeIds: [], hiddenCount: ids.length - actors.length };
-    actors.forEach(function (actor, index)
+    var arranged = [];
+    floors.forEach(function (floor) { floor.nodeIds.forEach(function (id) { arranged.push(actorById.get(id)); }); });
+    arranged.forEach(function (actor, index)
     {
       actor.floorId = merged.id;
       actor.seatIndex = index;
