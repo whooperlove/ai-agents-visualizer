@@ -413,3 +413,116 @@ Test("seats group what belongs together: managers first, tree levels in order an
   Assert.deepEqual(flat.floors[0].nodeIds, [].concat(office.floors[0].nodeIds, office.floors[1].nodeIds, office.floors[2].nodeIds), "the flat view keeps the same grouping");
   flat.floors[0].nodeIds.forEach(function (id, index) { Assert.equal(flat.actorById.get(id).seatIndex, index, id); });
 });
+
+function messages(from, to, count)
+{
+  return Array.from({ length: count }, function (_, index)
+  {
+    return edge(from, to, "collaboration", { id: "edge:" + from + ">" + to + ":" + index, message: { deliveryId: from + ">" + to + ":" + index } });
+  });
+}
+
+function seatOf(office, id)
+{
+  return office.actorById.get(id).seatIndex;
+}
+
+Test("sessions that message each other sit side by side on their floor, and the silent ones keep their place", function ()
+{
+  var nodes = ["a", "b", "c", "d", "e", "f"].map(function (id) { return node(id); });
+  var quiet = build(nodes, [], { project: "" });
+  Assert.deepEqual(quiet.floors[0].nodeIds, ["a", "b", "c", "d", "e", "f"], "without messages the order is unchanged");
+  var talking = build(nodes, [].concat(messages("a", "d", 3), messages("e", "b", 2)), { project: "" });
+  Assert.deepEqual(talking.floors[0].nodeIds, ["a", "d", "b", "e", "c", "f"], "each pair runs together where its earlier member stood");
+  talking.floors[0].nodeIds.forEach(function (id, index) { Assert.equal(seatOf(talking, id), index, id); });
+  Assert.equal(talking.order, "group");
+});
+
+Test("sessions at their desks and sessions resting on the sofas are grouped separately, working ones first", function ()
+{
+  var nodes = [node("a"), node("b"), node("c", { activity: { category: "inactive" } }), node("d"), node("e", { activity: { category: "inactive" } }), node("f", { activity: { category: "inactive" } })];
+  var office = build(nodes, [].concat(messages("a", "d", 3), messages("f", "c", 5), messages("b", "c", 2), messages("e", "f", 1)), { project: "" });
+  Assert.deepEqual(office.floors[0].nodeIds, ["a", "d", "b", "c", "f", "e"], "the desks first, then the sofas, each with its talkers together");
+  office.floors[0].nodeIds.forEach(function (id, index) { Assert.equal(seatOf(office, id), index, id); });
+});
+
+Test("a chain of talkers is arranged so the heavier the traffic, the closer the seats", function ()
+{
+  var nodes = ["a", "b", "c", "d"].map(function (id) { return node(id); });
+  var office = build(nodes, [].concat(messages("a", "b", 1), messages("b", "d", 10), messages("d", "c", 1)), { project: "" });
+  var order = office.floors[0].nodeIds;
+  Assert.equal(Math.abs(order.indexOf("b") - order.indexOf("d")), 1, "the heaviest pair is adjacent");
+  Assert.equal(order.length, 4);
+  var star = build(["h", "w", "x", "y", "z"].map(function (id) { return node(id); }), [].concat(messages("h", "z", 9), messages("h", "w", 5), messages("h", "x", 2), messages("h", "y", 1)), { project: "" });
+  var starOrder = star.floors[0].nodeIds;
+  Assert.equal(starOrder[starOrder.indexOf("h") + 1] === "z" || starOrder[starOrder.indexOf("h") - 1] === "z", true, "the busiest partner sits next to the hub");
+  Assert.ok(Math.abs(starOrder.indexOf("h") - starOrder.indexOf("z")) <= Math.abs(starOrder.indexOf("h") - starOrder.indexOf("y")), "a lighter partner is never closer");
+});
+
+Test("grouping keeps the manager at the head and only looks at messages between sessions of the same floor", function ()
+{
+  var nodes = [node("m"), node("w"), node("x"), node("y"), node("z"), node("boss2"), node("p"), node("q")];
+  var edges = [edge("m", "w", "management"), edge("m", "x", "management"), edge("m", "y", "management"), edge("m", "z", "management"), edge("boss2", "p", "management"), edge("boss2", "q", "management")];
+  var inside = build(nodes, edges.concat(messages("m", "z", 5), messages("w", "y", 3)), { project: "" });
+  Assert.deepEqual(inside.floors.find(function (floor) { return floor.managerId === "m"; }).nodeIds, ["m", "z", "w", "y", "x"], "the manager stays first, its heaviest partner follows");
+  var between = build(nodes, edges.concat(messages("w", "q", 9), messages("p", "z", 9)), { project: "" });
+  var plain = build(nodes, edges, { project: "" });
+  Assert.deepEqual(between.floors.map(function (floor) { return floor.nodeIds; }), plain.floors.map(function (floor) { return floor.nodeIds; }), "messages across floors move nobody");
+});
+
+Test("a message counts once however many records mention it, and only between two different sessions", function ()
+{
+  var nodes = [node("a"), node("b"), node("c")];
+  var edges = [edge("a", "c", "collaboration", { message: { deliveryId: "d1" } }), edge("c", "a", "collaboration", { message: { deliveryId: "d1" } }), edge("a", "c", "collaboration", { id: "legacy-request" }),
+    edge("b", "c", "collaboration", { message: { deliveryId: "d3" } }), edge("a", "a", "collaboration", { message: { deliveryId: "d4" } }), edge("a", "b", "dependency", { id: "documented" }),
+    edge("a", "gone", "collaboration", { message: { deliveryId: "d5" } })];
+  var office = build(nodes, edges, { project: "", order: "volume" });
+  Assert.deepEqual(office.floors[0].nodeIds, ["c", "a", "b"], "c took part in 3 messages, a in 2 and b in 1");
+});
+
+Test("the viewer can order seats by name, by status or by traffic, and then nobody is pinned to the head", function ()
+{
+  var nodes = [node("s10", { name: "s10", status: "completed" }), node("s2", { name: "s2", status: "idle" }), node("boss", { name: "boss", status: "running" }), node("s1", { name: "s1", status: "waiting" }),
+    node("e1", { name: "e1", status: "failed" }), node("u1", { name: "u1", status: "mystery" }), node("i1", { name: "i1", status: "interrupted" })];
+  var edges = [edge("boss", "s1", "management"), edge("boss", "s2", "management"), edge("boss", "s10", "management"), edge("boss", "e1", "management"), edge("boss", "u1", "management"), edge("boss", "i1", "management")];
+  var byName = build(nodes, edges, { project: "", order: "name" });
+  Assert.deepEqual(byName.floors[0].nodeIds, ["boss", "e1", "i1", "s1", "s2", "s10", "u1"], "alphabetical, digits compared as numbers, and the manager is not placed first");
+  Assert.equal(byName.order, "name");
+  var byStatus = build(nodes, edges, { project: "", order: "status" });
+  Assert.deepEqual(byStatus.floors[0].nodeIds, ["boss", "s1", "e1", "i1", "u1", "s2", "s10"], "working, waiting, error, interrupted, unknown, idle, completed");
+  var byVolume = build(nodes, edges.concat(messages("s10", "u1", 4), messages("s1", "s2", 2)), { project: "", order: "volume" });
+  Assert.deepEqual(byVolume.floors[0].nodeIds.slice(0, 4), ["s10", "u1", "s1", "s2"], "the most talkative first, ties in the default order");
+  var fallback = build(nodes, edges, { project: "", order: "nonsense" });
+  Assert.equal(fallback.order, "group");
+  Assert.deepEqual(fallback.floors[0].nodeIds[0], "boss");
+  [byName, byStatus, byVolume].forEach(function (office)
+  {
+    office.floors[0].nodeIds.forEach(function (id, index) { Assert.equal(seatOf(office, id), index, id); });
+  });
+});
+
+Test("the flat view sorts every session together under an explicit order and keeps floor groups under the default", function ()
+{
+  var nodes = [node("zz-boss"), node("a-1"), node("b-2"), node("r"), node("c-1", { kind: "agent" }), node("x1"), node("x2")];
+  var edges = [edge("zz-boss", "a-1", "management"), edge("zz-boss", "b-2", "management"), edge("r", "c-1", "spawn")];
+  var floors = build(nodes, edges, { project: "" });
+  var flat = build(nodes, edges, { project: "", groupFloors: false });
+  Assert.deepEqual(flat.floors[0].nodeIds, [].concat(floors.floors[0].nodeIds, floors.floors[1].nodeIds, floors.floors[2].nodeIds));
+  var sorted = build(nodes, edges, { project: "", groupFloors: false, order: "name" });
+  Assert.deepEqual(sorted.floors[0].nodeIds, ["a-1", "b-2", "c-1", "r", "x1", "x2", "zz-boss"]);
+  sorted.floors[0].nodeIds.forEach(function (id, index) { Assert.equal(seatOf(sorted, id), index, id); });
+});
+
+Test("a crowded floor of talkers is arranged without losing or repeating a session", function ()
+{
+  var nodes = Array.from({ length: 400 }, function (_, index) { return node("s" + String(index).padStart(3, "0")); });
+  var edges = [];
+  nodes.forEach(function (entry, index) { edges.push.apply(edges, messages(entry.id, nodes[(index * 7 + 3) % nodes.length].id, 1 + index % 4)); });
+  var started = Date.now();
+  var office = build(nodes, edges, { project: "" });
+  Assert.ok(Date.now() - started < 4000, "the arrangement stays within its budget");
+  var seated = office.floors[0].nodeIds;
+  Assert.equal(seated.length, 400);
+  Assert.equal(new Set(seated).size, 400);
+  Assert.deepEqual(seated.slice().sort(), nodes.map(function (entry) { return entry.id; }).sort());
+});

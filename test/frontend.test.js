@@ -72,7 +72,7 @@ test("retired diagram and dimension preferences migrate to the single character 
     runtime.sessionStorage = { getItem: function () { return JSON.stringify(Object.assign({}, preference, { filters: { project: "alpha", activity: "all" } })); } };
     runtime.wasState = { savedFilters: {} };
     runtime.wasElements = {};
-    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeQuiet"].forEach(function (key)
+    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeOrder", "officeQuiet"].forEach(function (key)
     {
       runtime.wasElements[key] = runtimeElement();
     });
@@ -104,7 +104,7 @@ test("character snapshots preserve the renderer and full names while delivery me
     officeScene: { setOffice: function (value) { calls.push(value.edges[0].status || "initial"); }, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } }
   };
   runtime.wasElements = {};
-  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeFloor", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
   runtime.wasElements.activity.value = "all";
   runtime.wasElements.relationFilters.querySelectorAll = function () { return [{ value: "collaboration" }]; };
   runtime.wasUpdateOffice();
@@ -114,6 +114,44 @@ test("character snapshots preserve the renderer and full names while delivery me
   runtime.wasState.model.edges[0].status = "completed";
   runtime.wasUpdateOffice();
   assert.deepEqual(calls, ["initial", "completed"]);
+});
+
+test("the seat order of the character stage reaches the office model, survives a reload and falls back to the default", function ()
+{
+  [["volume", "volume"], ["name", "name"], ["status", "status"], ["bogus", "group"], [undefined, "group"]].forEach(function (pair)
+  {
+    var runtime = frontendRuntime();
+    runtime.sessionStorage = { getItem: function () { return JSON.stringify({ view: "office", officeOrder: pair[0], filters: { project: "alpha", activity: "all" } }); } };
+    runtime.wasState = { savedFilters: {} };
+    runtime.wasElements = {};
+    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeOrder", "officeQuiet"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+    runtime.wasRestorePreferences();
+    assert.equal(runtime.wasElements.officeOrder.value, pair[1]);
+  });
+  var runtime = frontendRuntime();
+  var seen = [];
+  var actors = [node("one"), node("two")];
+  var floor = { id: "first", name: "팀", nodeIds: ["one", "two"] };
+  var office = { actors: actors, actorById: new Map(actors.map(function (actor) { return [actor.id, actor]; })), floors: [floor], floorById: new Map([[floor.id, floor]]), project: "alpha", stats: { matched: 2, context: 0, hidden: 0 } };
+  runtime.WasOfficeModel = { buildOffice: function (snapshot, options) { seen.push(options.order); return office; } };
+  runtime.wasReadFilters = filters;
+  runtime.wasRenderOfficeFloor = function () {};
+  runtime.wasRenderViewScope = function () {};
+  runtime.wasState = {
+    model: frontend.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false },
+    officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } }
+  };
+  runtime.wasElements = {};
+  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  runtime.wasElements.activity.value = "all";
+  runtime.wasElements.relationFilters.querySelectorAll = function () { return []; };
+  runtime.wasElements.officeOrder.value = "volume";
+  runtime.wasUpdateOffice();
+  runtime.wasElements.officeOrder.value = "name";
+  runtime.wasUpdateOffice();
+  assert.deepEqual(seen, ["volume", "name"]);
+  var html = fs.readFileSync(require.resolve("../public/index.html"), "utf8");
+  assert.deepEqual(Array.from(html.match(/<select id="was-office-order"[\s\S]*?<\/select>/)[0].matchAll(/<option value="(\w+)"/g)).map(function (match) { return match[1]; }), ["group", "name", "status", "volume"]);
 });
 
 test("connection details preserve every raw record and string or object conflict", function ()
@@ -300,7 +338,7 @@ test("character controls pan and zoom through the existing office scene API", fu
   runtime.window = { addEventListener: function () {} };
   runtime.wasState = { officeScene: { pan: function (value) { calls.push(["pan", value]); }, zoom: function (value) { calls.push(["zoom", value]); }, fit: function () { calls.push(["fit"]); } } };
   runtime.wasElements = {};
-  ["viewOffice", "officeGrouped", "officeQuiet", "officeFloor", "officeDown", "officeUp", "officeLeft", "officeRight", "officeZoomIn", "officeZoomOut"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  ["viewOffice", "officeGrouped", "officeOrder", "officeQuiet", "officeFloor", "officeDown", "officeUp", "officeLeft", "officeRight", "officeZoomIn", "officeZoomOut"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
   runtime.wasBindOfficeEvents();
   ["officeLeft", "officeRight", "officeZoomIn", "officeZoomOut"].forEach(function (key) { runtime.wasElements[key].dispatch("click"); });
   assert.deepEqual(calls, [["pan", -0.7], ["pan", 0.7], ["zoom", 1.2], ["zoom", 1 / 1.2]]);
@@ -1553,7 +1591,7 @@ test("floor labels render the message tokens of the office model and rebuild whe
   runtime.wasState = { model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false }, projectMessages: [],
     officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } } };
   runtime.wasElements = {};
-  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
   runtime.wasElements.relationFilters.querySelectorAll = function () { return []; };
   runtime.wasUpdateOffice();
   assert.equal(runtime.wasElements.officeFloor.children[0].textContent, "1F · Team Alpha (2)");
@@ -1759,7 +1797,7 @@ test("the floor list shows the top floor first while the data and the up / down 
   runtime.wasState = { model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "f1", reducedMotion: { matches: false }, projectMessages: [],
     officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "f1" }; } } };
   runtime.wasElements = {};
-  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
   runtime.wasElements.relationFilters.querySelectorAll = function () { return []; };
   runtime.wasUpdateOffice();
   var options = runtime.wasElements.officeFloor.children;

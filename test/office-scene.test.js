@@ -190,7 +190,7 @@ function find(root, className)
 Test('horizontal stage retains every actor, puts the manager first and reserves the complete name width', function ()
 {
   var office = makeOffice();
-  var layout = Renderer.layoutFloor(office, 'first', null, { pixelsPerUnit: 80, measure: function (name) { return name.length * 7; } });
+  var layout = Renderer.layoutFloor(office, 'first', { pixelsPerUnit: 80, measure: function (name) { return name.length * 7; } });
   Assert.equal(layout.order[0], 'a');
   Assert.equal(layout.actors.length, 3);
   Assert.equal(layout.seats.has('b'), false);
@@ -200,6 +200,58 @@ Test('horizontal stage retains every actor, puts the manager first and reserves 
   var all = Renderer.layoutFloor(officeWithActors(actors), 'first');
   Assert.equal(all.seats.size, 2500);
   Assert.equal(new Set(Array.from(all.seats.values()).map(function (seat) { return seat.x; })).size, 2500);
+});
+
+Test('the manager leads the floor only in the default arrangement, and an explicit sort order puts everyone where the model sorted them', function ()
+{
+  var office = makeOffice();
+  Assert.equal(Renderer.layoutFloor(office, 'first').order[0], 'a', 'no order given: the manager first');
+  office.order = 'group';
+  Assert.equal(Renderer.layoutFloor(office, 'first').order[0], 'a');
+  office.order = 'name';
+  var layout = Renderer.layoutFloor(office, 'first');
+  Assert.deepEqual(layout.order, ['c', 'd', 'a'], 'seats follow the model, the manager included');
+  Assert.ok(layout.seats.get('c').x < layout.seats.get('d').x && layout.seats.get('d').x < layout.seats.get('a').x);
+  Assert.deepEqual(Renderer.layoutFloor(office, 'first', { pixelsPerUnit: 84 }).order, layout.order, 'the same office gives the same seats every time');
+});
+
+Test('a changed seat order sends the sessions walking to their new seats and the session list follows the new order', function ()
+{
+  function seats(order, ids)
+  {
+    var office = officeWithActors(ids.map(function (id, index) { return actor(id, { seatIndex: index, role: id === 'a' ? 'manager' : 'member' }); }));
+    office.order = order;
+    return office;
+  }
+  function state(scene)
+  {
+    var found = {};
+    scene.getState().positions.forEach(function (entry) { found[entry.id] = entry; });
+    return found;
+  }
+  var browser = createBrowserHarness({ focused: true });
+  var scene = browser.renderer.create({ container: browser.container });
+  scene.setOffice(seats('group', ['a', 'c', 'd']));
+  browser.flush();
+  var before = state(scene);
+  var listed = function () { return find(browser.container, 'was-office-session-list').children.map(function (item) { return item.getAttribute('data-was-actor-id'); }); };
+  Assert.deepEqual(listed(), ['a', 'c', 'd']);
+  scene.setOffice(seats('name', ['d', 'c', 'a']));
+  browser.flush();
+  var started = state(scene);
+  Assert.equal(started.d.x, before.d.x, 'a session starts its walk where it stood instead of jumping');
+  Assert.equal(started.c.x, before.c.x);
+  Assert.deepEqual(listed(), ['d', 'c', 'a'], 'the list runs in seat order');
+  browser.advanceTime(1300);
+  browser.flush();
+  var arrived = state(scene);
+  Assert.ok(arrived.d.x < before.d.x, 'it reaches its new seat on the left');
+  Assert.ok(arrived.a.x > before.a.x, 'and the manager has gone to the right');
+  Assert.equal(arrived.c.x, before.c.x, 'a session whose seat is unchanged stays put');
+  scene.setOffice(seats('name', ['d', 'c', 'a']));
+  browser.flush();
+  Assert.equal(state(scene).d.x, arrived.d.x, 'an office with the same seats starts no walk');
+  scene.destroy();
 });
 
 Test('orthographic front camera has no quarter-view horizontal skew or perspective shrink', function ()
@@ -1004,7 +1056,7 @@ Test('mixed floors allocate desks only to working actors and place sofas immedia
   });
   var office = officeWithActors(actors);
   var before = JSON.stringify(office.actors);
-  var layout = Renderer.layoutFloor(office, 'first', null, { pixelsPerUnit: 84 });
+  var layout = Renderer.layoutFloor(office, 'first', { pixelsPerUnit: 84 });
   Assert.ok(Math.abs(layout.workEnd - (0.6 + 4 * 3.5)) < 0.000001);
   Assert.ok(Math.abs(layout.restStart - layout.workEnd - 2.4) < 0.000001);
   Assert.equal(layout.restSeats.size, 7);

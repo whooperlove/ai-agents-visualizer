@@ -51,6 +51,223 @@ function wasOfficeAvatar(id)
   return (hash >>> 0) % 8;
 }
 
+/* Status order of the "status" seat order: working first, then what needs a look, then what is done. The words match the stage's own reading of a status. */
+var WAS_OFFICE_STATUS_ORDER = ["running", "waiting", "error", "interrupted", "unknown", "idle", "completed"];
+
+function wasOfficeStatusKey(status)
+{
+  var value = wasOfficeText(status).toLowerCase();
+  return /^(running|active|working)$/.test(value) ? "running" : /^(waiting|blocked|needs-input)$/.test(value) ? "waiting" : /^(failed|error)$/.test(value) ? "error"
+    : value === "interrupted" ? "interrupted" : /^(idle|ready)$/.test(value) ? "idle" : /^(completed|done|stopped)$/.test(value) ? "completed" : "unknown";
+}
+
+/* The id a recorded message goes by; a documented relation that is not a delivery has none. */
+function wasOfficeMessageId(edge)
+{
+  var deliveryId = wasOfficeText(edge && edge.message && edge.message.deliveryId);
+  return deliveryId || (edge && edge.type === "collaboration" ? wasOfficeText(edge.id) : "");
+}
+
+/* Recorded messages between two different sessions, counted once per message id: the whole traffic of each session and the
+   traffic of each pair. Age and relation filters do not matter here, so seats do not shuffle as messages scroll out of the recent window. */
+function wasOfficeMessageVolumes(rawEdges, nodes)
+{
+  var seen = new Set();
+  var totals = new Map();
+  var pairs = new Map();
+  rawEdges.forEach(function (edge)
+  {
+    var id = wasOfficeMessageId(edge);
+    var from = wasOfficeText(edge && edge.from);
+    var to = wasOfficeText(edge && edge.to);
+    if (!id || seen.has(id) || from === to || !nodes.has(from) || !nodes.has(to))
+    {
+      return;
+    }
+    seen.add(id);
+    [[from, to], [to, from]].forEach(function (side)
+    {
+      totals.set(side[0], (totals.get(side[0]) || 0) + 1);
+      if (!pairs.has(side[0]))
+      {
+        pairs.set(side[0], new Map());
+      }
+      pairs.get(side[0]).set(side[1], (pairs.get(side[0]).get(side[1]) || 0) + 1);
+    });
+  });
+  return { totals: totals, pairs: pairs };
+}
+
+/* Largest connected group of talkers a floor puts in order; a bigger one stays together but keeps its default order inside, rather than slowing every refresh. */
+var WAS_OFFICE_GROUP_LIMIT = 1500;
+/* Cost evaluations of the seat search per floor, so a crowded floor cannot stall a refresh. */
+var WAS_OFFICE_SEARCH_BUDGET = 1500000;
+
+/* Seats of one talking group in a row: the sum of message count times seat distance over every pair, which the search lowers
+   by moving one session at a time to the seat where it costs least. Everything is deterministic: ties go to the lower seat. */
+function wasOfficeArrangeGroup(group, links, fixedFirst, budget)
+{
+  var members = new Set(group);
+  var weights = new Map();
+  group.forEach(function (id)
+  {
+    var row = [];
+    (links.get(id) || new Map()).forEach(function (count, other) { if (members.has(other)) { row.push([other, count]); } });
+    weights.set(id, row);
+  });
+  var rank = new Map(group.map(function (id, index) { return [id, index]; }));
+  var order = [group[0]];
+  var placed = new Set(order);
+  var pull = new Map();
+  function reach(id)
+  {
+    weights.get(id).forEach(function (entry)
+    {
+      if (!placed.has(entry[0]))
+      {
+        pull.set(entry[0], (pull.get(entry[0]) || 0) + entry[1]);
+      }
+    });
+  }
+  reach(group[0]);
+  while (order.length < group.length)
+  {
+    var best = null;
+    pull.forEach(function (amount, id)
+    {
+      if (best === null || amount > pull.get(best) || amount === pull.get(best) && rank.get(id) < rank.get(best))
+      {
+        best = id;
+      }
+    });
+    pull.delete(best);
+    order.push(best);
+    placed.add(best);
+    reach(best);
+  }
+  var pairsOf = [];
+  group.forEach(function (id)
+  {
+    weights.get(id).forEach(function (entry)
+    {
+      if (rank.get(id) < rank.get(entry[0]))
+      {
+        pairsOf.push([id, entry[0], entry[1]]);
+      }
+    });
+  });
+  function cost(arrangement)
+  {
+    var seat = new Map(arrangement.map(function (id, index) { return [id, index]; }));
+    var total = 0;
+    pairsOf.forEach(function (pair) { total += pair[2] * Math.abs(seat.get(pair[0]) - seat.get(pair[1])); });
+    return total;
+  }
+  var current = cost(order);
+  var lowest = fixedFirst ? 1 : 0;
+  var improved = true;
+  while (improved && budget.left > 0)
+  {
+    improved = false;
+    for (var from = lowest; from < order.length && budget.left > 0; from += 1)
+    {
+      var bestSeat = from;
+      var bestCost = current;
+      for (var to = lowest; to < order.length && budget.left > 0; to += 1)
+      {
+        if (to === from)
+        {
+          continue;
+        }
+        var trial = order.slice();
+        trial.splice(to, 0, trial.splice(from, 1)[0]);
+        budget.left -= pairsOf.length + order.length;
+        var trialCost = cost(trial);
+        if (trialCost < bestCost)
+        {
+          bestCost = trialCost;
+          bestSeat = to;
+        }
+      }
+      if (bestSeat !== from)
+      {
+        order.splice(bestSeat, 0, order.splice(from, 1)[0]);
+        current = bestCost;
+        improved = true;
+      }
+    }
+  }
+  return order;
+}
+
+/* Sessions that message each other sit side by side. Talking groups come out as runs, each starting where its earliest member
+   stood, and sessions that talk to nobody on the floor keep their place. fixedFirst keeps the manager or tree root at the head. */
+function wasOfficeGroupSeats(ids, links, fixedFirst)
+{
+  var onFloor = new Set(ids);
+  var talking = new Map();
+  ids.forEach(function (id)
+  {
+    var partners = [];
+    (links.get(id) || new Map()).forEach(function (count, other) { if (onFloor.has(other)) { partners.push(other); } });
+    if (partners.length)
+    {
+      talking.set(id, partners);
+    }
+  });
+  if (!talking.size)
+  {
+    return ids;
+  }
+  var position = new Map(ids.map(function (value, index) { return [value, index]; }));
+  var groupOf = new Map();
+  var groups = [];
+  ids.forEach(function (id)
+  {
+    if (!talking.has(id) || groupOf.has(id))
+    {
+      return;
+    }
+    var group = [];
+    var pending = [id];
+    groupOf.set(id, group);
+    while (pending.length)
+    {
+      var member = pending.pop();
+      group.push(member);
+      talking.get(member).forEach(function (other)
+      {
+        if (!groupOf.has(other))
+        {
+          groupOf.set(other, group);
+          pending.push(other);
+        }
+      });
+    }
+    group.sort(function (first, second) { return position.get(first) - position.get(second); });
+    groups.push(group);
+  });
+  var budget = { left: WAS_OFFICE_SEARCH_BUDGET };
+  var arranged = new Map();
+  groups.forEach(function (group)
+  {
+    arranged.set(group[0], group.length <= WAS_OFFICE_GROUP_LIMIT ? wasOfficeArrangeGroup(group, links, fixedFirst && group[0] === ids[0], budget) : group);
+  });
+  var result = [];
+  ids.forEach(function (id)
+  {
+    if (!groupOf.has(id))
+    {
+      result.push(id);
+    }
+    else if (arranged.has(id))
+    {
+      arranged.get(id).forEach(function (member) { result.push(member); });
+    }
+  });
+  return result;
+}
+
 function wasOfficeAddLink(adjacency, from, to)
 {
   if (!adjacency.has(from))
@@ -431,6 +648,22 @@ function wasOfficeBuildOffice(snapshot, options)
       }
     });
   }
+  /* The viewer may pick another seat order. "group" keeps the arrangement above and gathers those who message each other; the
+     others sort by name, by status (those that need a look first) or by how many messages a session has sent and received,
+     and then no one is pinned to the head of the floor. */
+  var seatOrder = ["group", "name", "status", "volume"].indexOf(options.order) !== -1 ? options.order : "group";
+  var volumes = wasOfficeMessageVolumes(Array.isArray(snapshot.edges) ? snapshot.edges : [], nodes);
+  function sortSeats(seatIds)
+  {
+    var base = new Map(seatIds.map(function (id, index) { return [id, index]; }));
+    return seatIds.slice().sort(function (first, second)
+    {
+      var result = seatOrder === "name" ? actorById.get(first).name.localeCompare(actorById.get(second).name, undefined, { numeric: true })
+        : seatOrder === "status" ? WAS_OFFICE_STATUS_ORDER.indexOf(wasOfficeStatusKey(actorById.get(first).status)) - WAS_OFFICE_STATUS_ORDER.indexOf(wasOfficeStatusKey(actorById.get(second).status))
+        : (volumes.totals.get(second) || 0) - (volumes.totals.get(first) || 0);
+      return result || base.get(first) - base.get(second);
+    });
+  }
   floors.forEach(function (floor)
   {
     var keys = new Map();
@@ -444,23 +677,37 @@ function wasOfficeBuildOffice(snapshot, options)
       var two = keys.get(second);
       return one[0] - two[0] || one[1] - two[1] || wasOfficeCompare(one[2], two[2]) || wasOfficeCompare(one[3], two[3]) || wasOfficeCompare(first, second);
     });
+    if (seatOrder === "group")
+    {
+      /* Sessions that talk a lot sit side by side, within one floor. The stage seats working sessions at their desks and resting
+         ones on the sofas further right, so each of the two groups is arranged on its own; the head of a group stays with the
+         manager or tree root. */
+      var anchor = floor.managerId !== null || floor.id.indexOf(treePrefix) === 0 ? floor.nodeIds[0] : null;
+      var working = floor.nodeIds.filter(function (id) { return !wasOfficeIsResting(actorById.get(id)); });
+      var resting = floor.nodeIds.filter(function (id) { return wasOfficeIsResting(actorById.get(id)); });
+      floor.nodeIds = wasOfficeGroupSeats(working, volumes.pairs, working[0] === anchor).concat(wasOfficeGroupSeats(resting, volumes.pairs, resting[0] === anchor));
+    }
+    else
+    {
+      floor.nodeIds = sortSeats(floor.nodeIds);
+    }
     floor.nodeIds.forEach(function (id, index) { actorById.get(id).seatIndex = index; });
   });
   if (options.groupFloors === false && ids.length)
   {
     var merged = { id: prefix + "all", name: wasOfficeFloorName(project) || wasOfficeMessage("scene.floor.all"), managerId: null, nodeIds: [], hiddenCount: ids.length - actors.length };
     var arranged = [];
-    floors.forEach(function (floor) { floor.nodeIds.forEach(function (id) { arranged.push(actorById.get(id)); }); });
-    arranged.forEach(function (actor, index)
+    floors.forEach(function (floor) { floor.nodeIds.forEach(function (id) { arranged.push(id); }); });
+    (seatOrder === "group" ? arranged : sortSeats(arranged)).forEach(function (id, index)
     {
-      actor.floorId = merged.id;
-      actor.seatIndex = index;
-      merged.nodeIds.push(actor.id);
+      actorById.get(id).floorId = merged.id;
+      actorById.get(id).seatIndex = index;
+      merged.nodeIds.push(id);
     });
     floors = [merged];
     floorById = new Map([[merged.id, merged]]);
   }
-  return { floors: floors, actors: actors, actorById: actorById, floorById: floorById, stats: { matched: matched.size, context: included.size - matched.size, hidden: ids.length - included.size, all: ids.length }, project: project };
+  return { floors: floors, actors: actors, actorById: actorById, floorById: floorById, stats: { matched: matched.size, context: included.size - matched.size, hidden: ids.length - included.size, all: ids.length }, project: project, order: seatOrder };
 }
 
 function wasOfficeNextFloor(floors, currentId, delta)
@@ -486,7 +733,7 @@ function wasOfficeIsResting(actor)
 function wasOfficeCreateCall(edge, office, options)
 {
   options = options || {};
-  var deliveryId = wasOfficeText(edge && edge.message && edge.message.deliveryId) || (edge && edge.type === "collaboration" ? wasOfficeText(edge.id) : "");
+  var deliveryId = wasOfficeMessageId(edge);
   if (!deliveryId || !office || !office.actorById)
   {
     return null;

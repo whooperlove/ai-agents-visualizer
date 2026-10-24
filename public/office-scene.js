@@ -658,26 +658,23 @@ var WasOfficeScene = null;
     return width;
   }
 
-  function layoutFloor(office, floorId, previous, settings)
+  /* Seats follow the order the model gives: manager first only in the default arrangement, resting sessions in their own zone. */
+  function layoutFloor(office, floorId, settings)
   {
     settings = settings || {};
     var pixelsPerUnit = Math.max(12, Number(settings.pixelsPerUnit) || 84);
     var measure = typeof settings.measure === 'function' ? settings.measure : estimateNameWidth;
     var actors = (office && office.actors || []).filter(function (actor) { return actor.floorId === floorId; }).slice();
     var floor = office && office.floorById && office.floorById.get(floorId) || (office && office.floors || []).find(function (entry) { return entry.id === floorId; });
+    var managerFirst = !office || !office.order || office.order === 'group';
     actors.sort(function (first, second)
     {
-      var firstPriority = floor && floor.managerId === first.id ? 0 : resting(first) ? 2 : 1;
-      var secondPriority = floor && floor.managerId === second.id ? 0 : resting(second) ? 2 : 1;
+      var firstPriority = managerFirst && floor && floor.managerId === first.id ? 0 : resting(first) ? 2 : 1;
+      var secondPriority = managerFirst && floor && floor.managerId === second.id ? 0 : resting(second) ? 2 : 1;
       return firstPriority - secondPriority || (Number(first.seatIndex) || 0) - (Number(second.seatIndex) || 0) || text(first.id).localeCompare(text(second.id));
     });
     var byId = new Map(actors.map(function (actor) { return [actor.id, actor]; }));
-    var order = previous ? previous.order.filter(function (id) { return byId.has(id); }) : [];
-    var included = new Set(order);
-    actors.forEach(function (actor)
-    {
-      if (!included.has(actor.id)) order.push(actor.id);
-    });
+    var order = actors.map(function (actor) { return actor.id; });
     var seats = new Map();
     var restSeats = new Map();
     var names = new Map();
@@ -1851,7 +1848,7 @@ var WasOfficeScene = null;
       office.floors.forEach(function (floor)
       {
         retained.add(floor.id);
-        layouts.set(floor.id, layoutFloor(office, floor.id, layouts.get(floor.id), { pixelsPerUnit: pixelsPerUnit(), measure: measureName }));
+        layouts.set(floor.id, layoutFloor(office, floor.id, { pixelsPerUnit: pixelsPerUnit(), measure: measureName }));
       });
       layouts.forEach(function (layout, id)
       {
@@ -2110,6 +2107,7 @@ var WasOfficeScene = null;
         });
       });
       if (!layout) return;
+      var nextItem = indexList.firstElementChild;
       layout.actors.forEach(function (actor)
       {
         var label = labels.get(actor.id);
@@ -2151,9 +2149,11 @@ var WasOfficeScene = null;
             selectActor(actor.id, { focus: true, notify: true });
             index.open = false;
           });
-          indexList.appendChild(item);
           indexItems.set(actor.id, item);
         }
+        /* The list runs in seat order, whichever order the stage was sorted into. */
+        if (item !== nextItem) indexList.insertBefore(item, nextItem);
+        else nextItem = nextItem.nextElementSibling;
         item.textContent = description;
       });
       indexCount = layout.actors.length;
@@ -2186,7 +2186,8 @@ var WasOfficeScene = null;
         return { x: target.x, z: z, seated: resting(actor), zone: target.zone };
       }
       var smooth = progress * progress * (3 - 2 * progress);
-      return { x: transition.fromX + (target.x - transition.fromX) * smooth, z: WORK_Z + (z - WORK_Z) * smooth, seated: progress > 0.88 && resting(actor),
+      var fromZ = typeof transition.fromZ === 'number' ? transition.fromZ : WORK_Z;
+      return { x: transition.fromX + (target.x - transition.fromX) * smooth, z: fromZ + (z - fromZ) * smooth, seated: progress > 0.88 && resting(actor),
         zone: target.zone, walking: progress <= 0.88, direction: target.x >= transition.fromX ? 1 : -1 };
     }
 
@@ -2467,9 +2468,14 @@ var WasOfficeScene = null;
         {
           var previous = previousOffice.actorById.get(actor.id);
           var oldPosition = previousPositions.get(actor.id);
-          if (previous && oldPosition && resting(previous) !== resting(actor) && actor.floorId === previous.floorId && actor.floorId === floorId)
+          if (!previous || !oldPosition || actor.floorId !== previous.floorId || actor.floorId !== floorId) return;
+          /* A session walks to its new seat when it starts or stops resting, and also when the seat order changes (a new sort
+             order, a session that joins or leaves, a group that forms) and its seat moves. */
+          var stays = resting(previous) === resting(actor);
+          var seat = layouts.has(actor.floorId) ? destination(actor, layouts.get(actor.floorId)) : null;
+          if (!stays || seat && Math.abs(seat.x - oldPosition.x) > 0.01)
           {
-            transitions.set(actor.id, { fromX: oldPosition.x, startedAt: now() });
+            transitions.set(actor.id, { fromX: oldPosition.x, fromZ: stays ? oldPosition.z : WORK_Z, startedAt: now() });
           }
         });
       }

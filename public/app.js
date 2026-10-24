@@ -1031,6 +1031,8 @@ function wasGetBranch(model, id)
 // Status sort order: sessions that are doing something first, then the ones that need a look, then the finished ones.
 var wasStatusRank = ["running", "waiting", "interrupted", "unknown", "idle", "completed"];
 var wasSortKeys = ["recent", "status", "name"];
+// The seat orders of the character stage; the first one, grouping by messages, is the default.
+var wasOfficeOrders = ["group", "name", "status", "volume"];
 // The direction a column starts with when it is chosen: newest, working and A first.
 var wasSortFirstDirection = { recent: "desc", status: "asc", name: "asc" };
 var wasDefaultSort = { key: "recent", direction: "desc" };
@@ -1305,7 +1307,7 @@ function wasSavePreferences()
   }
   try
   {
-    sessionStorage.setItem("was_observatory_preferences", JSON.stringify({ filters: wasReadFilters(), view: wasState.viewMode, edgeScope: wasElements.edgeScope.value, graphLayout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeQuiet: wasElements.officeQuiet.checked, sort: wasSortValue() }));
+    sessionStorage.setItem("was_observatory_preferences", JSON.stringify({ filters: wasReadFilters(), view: wasState.viewMode, edgeScope: wasElements.edgeScope.value, graphLayout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeOrder: wasElements.officeOrder.value, officeQuiet: wasElements.officeQuiet.checked, sort: wasSortValue() }));
   }
   catch (error)
   {
@@ -1340,6 +1342,7 @@ function wasRestorePreferences()
     wasElements.showQuiet.checked = preference.showQuiet !== false;
     wasState.officeFloorId = typeof preference.officeFloorId === "string" ? preference.officeFloorId : null;
     wasElements.officeGrouped.checked = preference.officeGrouped !== false;
+    wasElements.officeOrder.value = wasOfficeOrders.indexOf(preference.officeOrder) !== -1 ? preference.officeOrder : "group";
     wasElements.officeQuiet.checked = preference.officeQuiet !== false;
     wasState.sort = wasParseSort(preference.sort) || wasState.sort;
   }
@@ -1658,6 +1661,7 @@ function wasUpdateOffice()
   }
   wasState.officeData = WasOfficeModel.buildOffice({ nodes: nodes, edges: edges }, Object.assign({}, filters, {
     groupFloors: wasElements.officeGrouped.checked,
+    order: wasElements.officeOrder.value,
     showQuiet: wasElements.officeQuiet.checked,
     selectedId: wasState.selectedId
   }));
@@ -3432,7 +3436,7 @@ function wasEnterPresentation()
     wasExitPresentation();
     return;
   }
-  wasState.presentation = { filters: wasReadFilters(), viewMode: wasState.viewMode, layout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, edgeScope: wasElements.edgeScope.value, sidebar: wasState.sidebarCollapsed, focusId: wasState.focusId, selectedId: wasState.selectedId, selectedPairId: wasState.selectedPairId, detailScroll: wasElements.detail.scrollTop, detailLimit: wasState.detailLimit, detailRelationType: wasState.detailRelationType, treeScroll: wasElements.tree.scrollTop, expanded: new Set(wasState.expanded), camera: Object.assign({}, wasState.camera), officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeQuiet: wasElements.officeQuiet.checked };
+  wasState.presentation = { filters: wasReadFilters(), viewMode: wasState.viewMode, layout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, edgeScope: wasElements.edgeScope.value, sidebar: wasState.sidebarCollapsed, focusId: wasState.focusId, selectedId: wasState.selectedId, selectedPairId: wasState.selectedPairId, detailScroll: wasElements.detail.scrollTop, detailLimit: wasState.detailLimit, detailRelationType: wasState.detailRelationType, treeScroll: wasElements.tree.scrollTop, expanded: new Set(wasState.expanded), camera: Object.assign({}, wasState.camera), officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeOrder: wasElements.officeOrder.value, officeQuiet: wasElements.officeQuiet.checked };
   if (wasState.viewMode !== "office")
   {
     wasStopReplay();
@@ -3477,6 +3481,7 @@ function wasExitPresentation()
   wasElements.edgeScope.value = previous.edgeScope;
   wasState.officeFloorId = previous.officeFloorId;
   wasElements.officeGrouped.checked = previous.officeGrouped;
+  wasElements.officeOrder.value = previous.officeOrder;
   wasElements.officeQuiet.checked = previous.officeQuiet;
   if (wasState.officeScene) wasState.officeScene.setMode("2d");
   wasState.focusId = previous.focusId;
@@ -4937,6 +4942,7 @@ function wasBindOfficeEvents()
     if (wasState.officeScene) wasState.officeScene.fit();
     wasSavePreferences();
   });
+  wasElements.officeOrder.addEventListener("change", function () { wasStopReplay(); wasUpdateOffice(); wasSavePreferences(); });
   wasElements.officeQuiet.addEventListener("change", function () { wasStopReplay(); wasUpdateOffice(); wasSavePreferences(); });
   wasElements.officeFloor.addEventListener("change", function () { wasChooseOfficeFloor(wasElements.officeFloor.value, true); });
   wasElements.officeDown.addEventListener("click", function ()
@@ -5640,7 +5646,7 @@ function wasInitialize()
     });
     wasElements[key] = document.getElementById("was-" + id);
   });
-  ["sidebar", "sidebar-toggle", "detail-toggle", "tree-sort", "tree-columns", "graph-layout", "show-quiet", "show-grid", "quiet-count", "scene-status", "presentation", "presentation-exit", "presentation-detail", "presentation-flow", "overview-title", "overview-summary", "message-summary", "message-feed", "message-more", "replay-flow", "connection-list", "connection-summary", "view-office", "office-view", "office-grouped", "office-quiet", "office-floor", "office-up", "office-down", "office-stage", "office-summary", "office-travel", "office-left", "office-right", "office-zoom-in", "office-zoom-out", "locale"].forEach(function (id)
+  ["sidebar", "sidebar-toggle", "detail-toggle", "tree-sort", "tree-columns", "graph-layout", "show-quiet", "show-grid", "quiet-count", "scene-status", "presentation", "presentation-exit", "presentation-detail", "presentation-flow", "overview-title", "overview-summary", "message-summary", "message-feed", "message-more", "replay-flow", "connection-list", "connection-summary", "view-office", "office-view", "office-grouped", "office-order", "office-quiet", "office-floor", "office-up", "office-down", "office-stage", "office-summary", "office-travel", "office-left", "office-right", "office-zoom-in", "office-zoom-out", "locale"].forEach(function (id)
   {
     var key = id.replace(/-([a-z])/g, function (match, letter) { return letter.toUpperCase(); });
     wasElements[key] = document.getElementById("was-" + id);
