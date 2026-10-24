@@ -1797,6 +1797,9 @@ h1
 .was-presenting.was-presentation-detail-open .was-graph-legend { max-width: calc(100% - 380px); }
 .was-presenting.was-presentation-flow-open.was-presentation-detail-open .was-graph-legend { max-width: calc(100% - 836px); }
 .was-presenting.was-presentation-detail-open .was-zoom-controls { right: 368px; }
+/* The hierarchy list is not a canvas to pan: it makes room for the floating panels instead of sitting under them. */
+.was-presenting.was-presentation-detail-open .was-tree-view { padding-right: 372px; }
+.was-presenting.was-presentation-flow-open .was-tree-view { padding-bottom: 284px; }
 
 /* ---------- Responsive: main column width ---------- */
 @container was-main (min-width: 1500px)
@@ -1935,6 +1938,8 @@ h1
   .was-presenting .was-message-feed { max-height: 90px; }
   .was-presenting.was-presentation-flow-open .was-graph-legend { max-width: calc(100% - 24px); bottom: 190px; }
   .was-presenting.was-presentation-detail-open .was-detail { inset: 170px 10px 190px auto; width: min(340px, calc(100% - 20px)); }
+  .was-presenting.was-presentation-detail-open .was-tree-view { padding-right: 0; }
+  .was-presenting.was-presentation-flow-open .was-tree-view { padding-bottom: 190px; }
   .was-message-item summary { grid-template-columns: minmax(0, 1fr) 64px; }
   .was-message-item .was-message-state { display: none; }
 }

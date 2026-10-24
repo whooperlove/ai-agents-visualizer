@@ -3211,8 +3211,14 @@ function wasRenderOverview()
     wasElements.overviewSummary.textContent = wasT("app.overview.stageSummary", { sessions: wasFormatNumber(wasState.officeData.actors.length), floors: wasState.officeFloors.length, running: wasElements.statRunning.textContent });
     return;
   }
-  var quiet = wasState.viewMode === "office" && wasState.officeData ? wasState.officeData.stats.context : wasState.operatingView ? wasState.operatingView.quiet.size : 0;
   var project = wasElements.project.value || wasT("app.filter.allProjects");
+  if (wasState.viewMode === "tree")
+  {
+    wasElements.overviewTitle.textContent = wasT("app.overview.treeTitle", { project: project });
+    wasElements.overviewSummary.textContent = wasT("app.overview.treeSummary", { matched: wasFormatNumber(wasState.view.matched.size), running: wasElements.statRunning.textContent, nodes: wasFormatNumber(wasState.model.nodes.length) });
+    return;
+  }
+  var quiet = wasState.viewMode === "office" && wasState.officeData ? wasState.officeData.stats.context : wasState.operatingView ? wasState.operatingView.quiet.size : 0;
   wasElements.overviewTitle.textContent = wasState.viewMode === "office" ? wasT("app.overview.officeTitle", { project: project }) : wasT("app.overview.relationsTitle", { project: project });
   wasElements.overviewSummary.textContent = wasT("app.overview.summary", { matched: wasFormatNumber(wasState.view.matched.size), running: wasElements.statRunning.textContent, quiet: quiet, nodes: wasFormatNumber(wasState.model.nodes.length) });
 }
@@ -3437,7 +3443,7 @@ function wasEnterPresentation()
     return;
   }
   wasState.presentation = { filters: wasReadFilters(), viewMode: wasState.viewMode, layout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, edgeScope: wasElements.edgeScope.value, sidebar: wasState.sidebarCollapsed, focusId: wasState.focusId, selectedId: wasState.selectedId, selectedPairId: wasState.selectedPairId, detailScroll: wasElements.detail.scrollTop, detailLimit: wasState.detailLimit, detailRelationType: wasState.detailRelationType, treeScroll: wasElements.tree.scrollTop, expanded: new Set(wasState.expanded), camera: Object.assign({}, wasState.camera), officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeOrder: wasElements.officeOrder.value, officeQuiet: wasElements.officeQuiet.checked };
-  if (wasState.viewMode !== "office")
+  if (wasState.viewMode === "graph")
   {
     wasStopReplay();
     ["search", "provider", "status", "kind"].forEach(function (key) { wasElements[key].value = ""; });
@@ -3451,12 +3457,12 @@ function wasEnterPresentation()
   wasElements.presentationDetail.setAttribute("aria-expanded", "false");
   wasElements.presentationFlow.setAttribute("aria-expanded", "false");
   wasUpdateView(false);
-  wasSetView(wasState.presentation.viewMode === "office" ? "office" : "graph");
+  wasSetView(wasState.presentation.viewMode);
   if (wasState.viewMode === "office" && wasState.officeScene)
   {
     wasResizeOfficeAfterLayout(true);
   }
-  else wasFitGraph();
+  else if (wasState.viewMode === "graph") wasFitGraph();
   wasElements.presentationExit.focus();
   wasElements.announcement.textContent = wasT("app.announce.presentation");
 }

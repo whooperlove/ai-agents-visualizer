@@ -1183,6 +1183,61 @@ test("pressing the selected character again closes its detail, and reopens it wh
   assert.ok(classes.has("was-presentation-detail-open"));
 });
 
+function wideViewRuntime(viewMode)
+{
+  var runtime = frontendRuntime();
+  var calls = [];
+  var classes = new Set();
+  runtime.document = { hidden: false, body: { classList: { add: function (name) { classes.add(name); }, remove: function (name) { classes.delete(name); }, contains: function (name) { return classes.has(name); } } } };
+  runtime.wasState = { presentation: null, viewMode: viewMode, sidebarCollapsed: false, focusId: "focus", selectedId: null, selectedPairId: null, detailLimit: 20, detailRelationType: "", expanded: new Set(), camera: {}, officeFloorId: null, officeScene: null };
+  runtime.wasElements = {};
+  ["search", "provider", "status", "kind", "activity", "graphLayout", "showQuiet", "edgeScope", "officeGrouped", "officeOrder", "officeQuiet", "detail", "tree", "presentation", "presentationDetail", "presentationFlow", "announcement"].forEach(function (key)
+  {
+    runtime.wasElements[key] = runtimeElement();
+  });
+  runtime.wasElements.search.value = "alpha";
+  runtime.wasElements.activity.value = "all";
+  runtime.wasElements.graphLayout.value = "native";
+  runtime.wasElements.presentation.focus = function () {};
+  runtime.wasElements.presentationExit = Object.assign(runtimeElement(), { focus: function () {} });
+  runtime.wasReadFilters = function () { return { query: runtime.wasElements.search.value }; };
+  runtime.wasSetView = function (mode) { calls.push("view:" + mode); runtime.wasState.viewMode = mode; };
+  ["wasStopReplay", "wasSetSidebar", "wasUpdateView", "wasFitGraph", "wasResizeOfficeAfterLayout"].forEach(function (name)
+  {
+    runtime[name] = function () { calls.push(name); };
+  });
+  return { runtime: runtime, calls: calls, classes: classes };
+}
+
+test("wide view enlarges the view that is open instead of switching to the relation graph", function ()
+{
+  var tree = wideViewRuntime("tree");
+  tree.runtime.wasEnterPresentation();
+  assert.deepEqual(tree.calls.filter(function (call) { return call.indexOf("view:") === 0; }), ["view:tree"]);
+  assert.equal(tree.runtime.wasState.viewMode, "tree");
+  assert.ok(tree.classes.has("was-presenting"));
+  // The list the user was reading stays as it was; only the graph overview starts from a clean, recent scope.
+  assert.equal(tree.runtime.wasElements.search.value, "alpha");
+  assert.equal(tree.runtime.wasElements.activity.value, "all");
+  assert.equal(tree.runtime.wasElements.graphLayout.value, "native");
+  assert.equal(tree.runtime.wasState.focusId, "focus");
+  assert.equal(tree.calls.includes("wasFitGraph"), false);
+  assert.equal(tree.calls.includes("wasStopReplay"), false);
+
+  var graph = wideViewRuntime("graph");
+  graph.runtime.wasEnterPresentation();
+  assert.deepEqual(graph.calls.filter(function (call) { return call.indexOf("view:") === 0; }), ["view:graph"]);
+  assert.equal(graph.runtime.wasElements.search.value, "");
+  assert.equal(graph.runtime.wasElements.activity.value, "recent");
+  assert.equal(graph.runtime.wasElements.graphLayout.value, "operating");
+  assert.equal(graph.runtime.wasState.focusId, null);
+  assert.ok(graph.calls.includes("wasFitGraph"));
+
+  tree.runtime.wasExitPresentation();
+  assert.equal(tree.runtime.wasState.viewMode, "tree");
+  assert.equal(tree.classes.has("was-presenting"), false);
+});
+
 function partnerRuntime(edges)
 {
   var runtime = frontendRuntime();

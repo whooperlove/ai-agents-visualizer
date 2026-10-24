@@ -264,8 +264,10 @@
       "app.overview.stageTitle": "{project} · Character stage",
       "app.overview.officeTitle": "{project} · Character office",
       "app.overview.relationsTitle": "{project} · Operating relations",
+      "app.overview.treeTitle": "{project} · Hierarchy list",
       "app.overview.stageSummary": "Sessions shown {sessions} · Floors {floors} · Observed working {running} · Recent activity ≠ running now",
       "app.overview.summary": "Matches in recent scope {matched} · Observed working {running} · Quiet team context {quiet} · Original nodes {nodes}",
+      "app.overview.treeSummary": "Matching sessions {matched} · Observed working {running} · Original nodes {nodes}",
 
       "app.replay.start": "Replay recent deliveries",
       "app.replay.stop": "Stop replay",
@@ -542,8 +544,10 @@
       "app.overview.stageTitle": "{project} · 캐릭터 무대",
       "app.overview.officeTitle": "{project} · 캐릭터 오피스",
       "app.overview.relationsTitle": "{project} · 운영 관계",
+      "app.overview.treeTitle": "{project} · 계층 목록",
       "app.overview.stageSummary": "표시 세션 {sessions} · 층 {floors} · 작업 중 관측 {running} · 최근 활동 ≠ 현재 실행",
       "app.overview.summary": "최근 범위 일치 {matched} · 작업 중 관측 {running} · 조용한 팀 맥락 {quiet} · 원본 노드 {nodes}개",
+      "app.overview.treeSummary": "일치 세션 {matched} · 작업 중 관측 {running} · 원본 노드 {nodes}개",
 
       "app.replay.start": "최근 전달 이력 재생",
       "app.replay.stop": "이력 재생 중지",
