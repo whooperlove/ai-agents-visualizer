@@ -557,6 +557,8 @@
 {
   right: 16px;
   bottom: 14px;
+  transform: translateY(calc(-1 * var(--was-travel-lift, 0px)));
+  transition: transform var(--was-travel-duration, .6s) ease-in-out;
   padding: 4px 11px;
   color: var(--was-stage-text-2);
   font-size: 11px;
@@ -590,6 +592,8 @@
   position: absolute;
   left: 16px;
   bottom: 14px;
+  transform: translateY(calc(-1 * var(--was-travel-lift, 0px)));
+  transition: transform var(--was-travel-duration, .6s) ease-in-out;
   z-index: 7;
   max-width: calc(100% - 32px);
   border: 1px solid var(--was-stage-line);

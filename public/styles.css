@@ -110,6 +110,7 @@
   --was-icon-frame: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.75 6V2.75H6M10 2.75h3.25V6M13.25 10v3.25H10M6 13.25H2.75V10'/%3E%3C/svg%3E");
   --was-icon-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M3.5 3.5l9 9M12.5 3.5l-9 9'/%3E%3C/svg%3E");
   --was-icon-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M8 7.2v3.6M8 5.1v.1'/%3E%3C/svg%3E");
+  --was-icon-message: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 2.75h9a1.25 1.25 0 0 1 1.25 1.25v5.5a1.25 1.25 0 0 1-1.25 1.25H8l-3 2.5v-2.5H3.5A1.25 1.25 0 0 1 2.25 9.5V4A1.25 1.25 0 0 1 3.5 2.75z'/%3E%3Cpath d='M5.5 7.25h.01M8 7.25h.01M10.5 7.25h.01'/%3E%3C/svg%3E");
 }
 
 /* ---------- Base ---------- */
@@ -1461,7 +1462,13 @@ h1
 .was-zoom-controls span { min-width: 50px; color: var(--was-text); font: 500 11px/1 var(--was-mono); text-align: center; font-variant-numeric: tabular-nums; }
 
 /* ---------- Character office chrome (stage internals live in office-scene.css) ---------- */
-.was-office-view { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--was-bg); }
+/* The travel line floats over the bottom of the stage and slides in from the bottom edge; the view clips it while it is out.
+   The stage chips ride along: --was-travel-lift is how far they stand above their resting place, --was-travel-duration how long the move takes.
+   Both follow the line's state from here, so the line and the chips always share one timing. The chips move by transform like the line does:
+   animating their bottom would run through layout on the main thread, which the live stage keeps busy, and they would trail the line.
+   Without :has() the chips simply stay lifted. */
+.was-office-view { --was-travel-reserve: calc(12px * 1.55 + 17px); --was-travel-lift: var(--was-travel-reserve); --was-travel-duration: .6s; position: relative; overflow: hidden; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--was-bg); }
+.was-office-view:has(.was-office-travel.was-travel-idle) { --was-travel-lift: 0px; --was-travel-duration: .45s; }
 .was-office-toolbar { gap: 8px 10px; }
 .was-office-toolbar .was-toolbar-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .was-office-toolbar select { max-width: 240px; }
@@ -1494,23 +1501,36 @@ h1
 }
 .was-office-travel
 {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 8;
   display: flex;
-  flex-shrink: 0;
-  min-height: calc(1.55em + 17px);
-  align-items: flex-start;
+  min-height: var(--was-travel-reserve);
+  align-items: center;
   gap: 8px;
   padding: 8px 14px;
   border-top: 1px solid var(--was-line);
-  background: var(--was-bg-elev);
+  /* The floor behind is a bright tan, and black alone over it turns brown: its color is taken out first, so the band reads as dark glass. */
+  background: rgba(0, 0, 0, .7);
+  -webkit-backdrop-filter: grayscale(1) brightness(.6);
+  backdrop-filter: grayscale(1) brightness(.6);
   color: var(--was-text-2);
   font-size: 12px;
   line-height: 1.55;
+  pointer-events: none;
+  transition: transform var(--was-travel-duration) ease-in-out;
 }
-/* An empty line keeps its place, so the stage never changes height when a call starts or ends; a resize would redraw the canvas.
-   The hidden attribute cannot do this here: the page resets it to display: none. */
+/* The line is an overlay, so it never takes height from the stage; a resize would redraw the canvas.
+   An empty line slides down out of the view, a little faster than it came in. It is moved, not hidden, so the status text keeps being announced. */
 .was-office-travel.was-travel-idle
 {
-  visibility: hidden;
+  transform: translateY(100%);
+}
+.was-office-travel.was-travel-idle::before
+{
+  display: none;
 }
 .was-office-travel::before
 {
@@ -1518,10 +1538,9 @@ h1
   flex-shrink: 0;
   width: 13px;
   height: 13px;
-  margin-top: 2px;
   background: var(--was-accent);
-  -webkit-mask: var(--was-icon-info) center / contain no-repeat;
-  mask: var(--was-icon-info) center / contain no-repeat;
+  -webkit-mask: var(--was-icon-message) center / contain no-repeat;
+  mask: var(--was-icon-message) center / contain no-repeat;
 }
 #was-office-floor { border-color: var(--was-accent-line); background-color: var(--was-accent-soft); color: var(--was-accent-strong); font-weight: 650; }
 .was-office-mode .was-presentation-actions #was-presentation-detail { display: none; }

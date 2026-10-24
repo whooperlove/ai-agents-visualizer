@@ -2039,15 +2039,43 @@ test("a remembered sort is restored when the page starts and is part of the save
   assert.equal(writes[writes.length - 1].sort, "status:desc");
 });
 
-test("the status line under the stage keeps its height when it is empty, so a call starting or ending never resizes the stage", function ()
+test("the status line is a band that slides up over the bottom of the stage and back out with the stage chips, so a call starting or ending never resizes the stage", function ()
 {
   var css = fs.readFileSync(require.resolve("../public/styles.css"), "utf8");
-  var hidden = css.slice(css.indexOf(".was-office-travel.was-travel-idle"));
-  hidden = hidden.slice(0, hidden.indexOf("}"));
-  assert.match(hidden, /visibility: hidden;/);
-  assert.doesNotMatch(hidden, /display: none/, "removing the line from the layout would resize the stage and redraw the canvas");
+  var scene = fs.readFileSync(require.resolve("../public/office-scene.css"), "utf8");
+  var idleIcon = css.slice(css.indexOf(".was-office-travel.was-travel-idle::before"));
+  assert.match(idleIcon, /^\.was-office-travel\.was-travel-idle::before\n\{\n  display: none;\n\}/, "an empty band has no icon to slide out");
+  var idle = css.slice(css.indexOf(".was-office-travel.was-travel-idle\n{"));
+  idle = idle.slice(0, idle.indexOf("}"));
+  assert.match(idle, /transform: translateY\(100%\);/, "an empty band waits below the bottom edge of the view");
+  assert.doesNotMatch(idle, /visibility|display|opacity|background|color/, "the band is moved, not hidden or faded, so the status text keeps being announced");
   assert.match(fs.readFileSync(require.resolve("../public/index.html"), "utf8"), /id="was-office-travel" class="was-office-travel was-travel-idle"/, "the line starts empty");
   var line = css.slice(css.indexOf(".was-office-travel\n{"));
   line = line.slice(0, line.indexOf("}"));
-  assert.match(line, /min-height: calc\(1\.55em \+ 17px\);/, "an empty line is as tall as a line with text");
+  assert.match(line, /position: absolute;/, "the line is an overlay, so the stage runs to the bottom of the view");
+  assert.match(line, /bottom: 0;/);
+  assert.match(line, /min-height: var\(--was-travel-reserve\);/, "an empty line is as tall as a line with text");
+  assert.match(line, /background: rgba\(0, 0, 0, \.7\);/, "a message is read against a dark band");
+  assert.match(line, /backdrop-filter: grayscale\(1\) brightness\(\.6\);/, "the tan floor behind must not tint the band brown");
+  assert.match(line, /transition: transform var\(--was-travel-duration\) ease-in-out;/, "the band slides, eased at both ends, and does not fade");
+  assert.doesNotMatch(line, /transition:[^;]*(opacity|background|color|filter)/, "nothing fades");
+  assert.match(line, /align-items: center;/, "the icon follows the middle of the text, however many lines it wraps to");
+  var icon = css.slice(css.indexOf(".was-office-travel::before\n{"));
+  icon = icon.slice(0, icon.indexOf("}"));
+  assert.match(icon, /mask: var\(--was-icon-message\)/, "the line speaks about messages, so its icon is a speech bubble and not an exclamation mark");
+  var view = css.slice(css.indexOf(".was-office-view {"));
+  view = view.slice(0, view.indexOf("}"));
+  assert.match(view, /--was-travel-reserve: calc\(12px \* 1\.55 \+ 17px\);/, "the reserved band is one line of 12px text plus its padding and border");
+  assert.match(view, /position: relative;/);
+  assert.match(view, /overflow: hidden;/, "a band that is out of the view must not show below it or stretch the page");
+  assert.match(view, /--was-travel-lift: var\(--was-travel-reserve\);/, "with the band in, the chips stand one band higher");
+  assert.match(view, /--was-travel-duration: \.6s;/, "the band comes in over .6s");
+  assert.match(css, /\.was-office-view:has\(\.was-office-travel\.was-travel-idle\) \{ --was-travel-lift: 0px; --was-travel-duration: \.45s; \}/, "with the band out, the chips rest at the bottom and go back down faster, together with it");
+  // Whatever sits at the bottom of the stage rides along with the band instead of being covered by it, on the band's own timing and path:
+  // a chip moved by its bottom edge would be laid out on the busy main thread and trail the band, which is moved by transform.
+  var lifted = scene.match(/transform: translateY\(calc\(-1 \* var\(--was-travel-lift, 0px\)\)\);/g) || [];
+  assert.equal(lifted.length, 2, "the help chip and the session index are lifted by transform");
+  var moving = scene.match(/transition: transform var\(--was-travel-duration, \.6s\) ease-in-out;/g) || [];
+  assert.equal(moving.length, 2, "the help chip and the session index move with the band");
+  assert.doesNotMatch(scene, /bottom: calc\(/, "no chip is moved through its bottom edge");
 });
