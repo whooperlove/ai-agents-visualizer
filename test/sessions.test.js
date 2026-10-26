@@ -5,6 +5,7 @@ const Assert = require('node:assert/strict');
 const Fs = require('node:fs');
 const Os = require('node:os');
 const Path = require('node:path');
+const ChildProcess = require('node:child_process');
 const Sessions = require('../src/sources/sessions');
 const Reader = require('../src/sources/reader');
 const I18n = require('./helpers/i18n').loadNodeI18n();
@@ -296,6 +297,192 @@ Test('old running events and fresh mtimes do not claim a live process; sources s
     });
 });
 
+Test('Claude queued-only user records preserve completed and running activity until execution starts', function(t, done)
+{
+    const f = fixture(t);
+    const baseTime = Date.now();
+    const completedAt = new Date(baseTime - 10 * 60 * 1000).toISOString();
+    const expiredQueueAt = new Date(baseTime - 3 * 60 * 1000).toISOString();
+    const runningAt = new Date(baseTime - 2000).toISOString();
+    const queuedAt = new Date(baseTime - 1000).toISOString();
+    const cases = [
+        { id: 'queued-user', queuedAt: expiredQueueAt, resumedType: 'user' },
+        { id: 'queued-api', queuedAt: queuedAt, resumedType: 'api-request' },
+        { id: 'running-queue', queuedAt: queuedAt, running: true }
+    ];
+    cases.forEach(function(item)
+    {
+        const records = [{ type: 'assistant', timestamp: completedAt, message: { stop_reason: 'end_turn', content: 'PRIVATE RESPONSE' } }];
+        if (item.running)
+        {
+            records.push({ type: 'api-request', timestamp: runningAt });
+        }
+        records.push({ type: 'user', timestamp: item.queuedAt, queueTranscriptOnly: true, message: { content: 'PRIVATE QUEUED PROMPT' } });
+        write(Path.join(f.claudeRoot, 'project', item.id + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
+    });
+    const collector = f.create();
+    collector.start(function(error, snapshot)
+    {
+        Assert.ifError(error);
+        Assert.equal(snapshot.nodes.length, cases.length);
+        cases.forEach(function(item)
+        {
+            const node = snapshot.nodes.find(function(node) { return node.id === 'claude:' + item.id; });
+            Assert.equal(node.status, item.running ? 'running' : 'idle', item.id);
+            Assert.equal(node.lastSeen, item.running ? runningAt : completedAt, item.id);
+            Assert.equal(I18n.resolve(node.statusEvidence, 'en'), item.running ? 'Claude api-request' : 'Claude assistant end_turn', item.id);
+        });
+        Assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
+        const resumedAt = now();
+        cases.filter(function(item) { return !item.running; }).forEach(function(item)
+        {
+            Fs.appendFileSync(Path.join(f.claudeRoot, 'project', item.id + '.jsonl'), JSON.stringify({ type: item.resumedType, timestamp: resumedAt, message: { content: 'PRIVATE EXECUTION PROMPT' } }) + '\n');
+        });
+        until(function()
+        {
+            return cases.every(function(item)
+            {
+                const node = collector.snapshot().nodes.find(function(node) { return node.id === 'claude:' + item.id; });
+                return node.status === 'running' && node.lastSeen === (item.running ? runningAt : resumedAt);
+            });
+        }, function(resumeError)
+        {
+            Assert.ifError(resumeError);
+            Assert.doesNotMatch(JSON.stringify(collector.snapshot()), /PRIVATE/);
+            done();
+        });
+    });
+});
+
+Test('verified Claude runtime overrides stale root events and disappears without affecting child agents', function(t, done)
+{
+    const f = fixture(t);
+    const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const root = Path.join(f.claudeRoot, 'project', 'runtime-root');
+    write(root + '.jsonl', [
+        { type: 'api-request', timestamp: oldAt },
+        { type: 'user', timestamp: now(), queueTranscriptOnly: true, message: { content: 'PRIVATE QUEUED PROMPT' } }
+    ].map(JSON.stringify).join('\n') + '\n');
+    write(Path.join(root, 'subagents', 'agent-child.jsonl'), { type: 'api-request', timestamp: oldAt });
+    write(Path.join(root, 'subagents', 'agent-child.meta.json'), { spawnDepth: 1 });
+    const procStart = ChildProcess.execFileSync('/bin/ps', ['-p', String(process.pid), '-o', 'lstart='], {
+        encoding: 'utf8', env: Object.assign({}, process.env, { LC_ALL: 'C', TZ: 'UTC' })
+    }).trim();
+    const runtimePath = Path.join(Path.dirname(f.claudeRoot), 'sessions', String(process.pid) + '.json');
+    const runtime = {
+        pid: process.pid, sessionId: 'runtime-root', status: 'busy', procStart: procStart,
+        updatedAt: Date.now(), statusUpdatedAt: Date.now(), prompt: 'PRIVATE RUNTIME PROMPT', path: 'PRIVATE PATH', cwd: 'PRIVATE CWD'
+    };
+    write(runtimePath, runtime);
+    const observedAfter = Date.now();
+    const collector = f.create();
+    collector.start(function(error, snapshot)
+    {
+        Assert.ifError(error);
+        const node = snapshot.nodes.find(function(node) { return node.id === 'claude:runtime-root'; });
+        Assert.equal(node.status, 'running');
+        Assert.ok(Date.parse(node.lastSeen) >= observedAfter);
+        Assert.match(I18n.resolve(node.statusEvidence, 'en'), /busy/);
+        Assert.match(I18n.resolve(node.statusEvidence, 'en'), new RegExp(String(process.pid)));
+        Assert.ok(node.sources.some(function(source) { return source.kind === 'claude-runtime' && source.path === Fs.realpathSync(runtimePath); }));
+        checkChild(snapshot);
+        const steps = [
+            { extra: { status: 'idle' }, expected: 'idle' },
+            { extra: { status: 'waiting' }, expected: 'waiting' },
+            { extra: { status: 'shell' }, expected: 'idle' },
+            { extra: { procStart: 'Mon Jan  1 00:00:00 1990' }, expected: 'unknown' },
+            { extra: { status: 'busy' }, expected: 'running' },
+            { remove: true, expected: 'unknown' }
+        ];
+        var index = 0;
+        function advance()
+        {
+            if (index >= steps.length)
+            {
+                done();
+                return;
+            }
+            const step = steps[index];
+            index += 1;
+            const changedAt = Date.now();
+            if (step.remove)
+            {
+                Fs.unlinkSync(runtimePath);
+            }
+            else
+            {
+                write(runtimePath, Object.assign({}, runtime, step.extra));
+            }
+            until(function()
+            {
+                return collector.snapshot().nodes.find(function(node) { return node.id === 'claude:runtime-root'; }).status === step.expected;
+            }, function(updateError)
+            {
+                Assert.ifError(updateError);
+                const current = collector.snapshot();
+                const parent = current.nodes.find(function(node) { return node.id === 'claude:runtime-root'; });
+                Assert.equal(parent.sources.some(function(source) { return source.kind === 'claude-runtime'; }), step.expected !== 'unknown');
+                if (step.expected === 'unknown')
+                {
+                    Assert.equal(parent.lastSeen, oldAt);
+                }
+                else
+                {
+                    Assert.ok(Date.parse(parent.lastSeen) >= changedAt);
+                }
+                checkChild(current);
+                advance();
+            });
+        }
+        advance();
+    });
+    function checkChild(snapshot)
+    {
+        const child = snapshot.nodes.find(function(node) { return node.id === 'claude:runtime-root:agent:child'; });
+        Assert.equal(child.status, 'unknown');
+        Assert.equal(child.lastSeen, oldAt);
+        Assert.equal(child.sources.some(function(source) { return source.kind === 'claude-runtime'; }), false);
+        Assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
+    }
+});
+
+Test('an exited Claude runtime process restores the stale transcript status', function(t, done)
+{
+    const f = fixture(t);
+    const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    write(Path.join(f.claudeRoot, 'project', 'exited-runtime.jsonl'), { type: 'api-request', timestamp: oldAt });
+    const child = ChildProcess.spawn(process.execPath, ['-e', 'setInterval(function() {}, 1000);'], { stdio: 'ignore' });
+    t.after(function() { child.kill(); });
+    child.once('error', done);
+    child.once('spawn', function()
+    {
+        const procStart = ChildProcess.execFileSync('/bin/ps', ['-p', String(child.pid), '-o', 'lstart='], {
+            encoding: 'utf8', env: Object.assign({}, process.env, { LC_ALL: 'C', TZ: 'UTC' })
+        }).trim();
+        write(Path.join(Path.dirname(f.claudeRoot), 'sessions', String(child.pid) + '.json'), {
+            sessionId: 'exited-runtime', pid: child.pid, procStart: procStart, status: 'busy', statusUpdatedAt: Date.now(), updatedAt: Date.now()
+        });
+        const collector = f.create();
+        collector.start(function(error, snapshot)
+        {
+            Assert.ifError(error);
+            Assert.equal(snapshot.nodes[0].status, 'running');
+            child.once('exit', function()
+            {
+                until(function() { return collector.snapshot().nodes[0].status === 'unknown'; }, function(exitError)
+                {
+                    Assert.ifError(exitError);
+                    const node = collector.snapshot().nodes[0];
+                    Assert.equal(node.lastSeen, oldAt);
+                    Assert.equal(node.sources.some(function(source) { return source.kind === 'claude-runtime'; }), false);
+                    done();
+                });
+            });
+            child.kill();
+        });
+    });
+});
+
 Test('explicit session account assignments override two observed aliases and follow config edits and deletion', function(t, done)
 {
     const f = fixture(t);
@@ -393,6 +580,179 @@ Test('tool names appear as sanitized status metadata without inputs, outputs or 
         Assert.equal(I18n.resolve(codexEvidence, 'en'), 'Codex tool result event: functions.exec command');
         Assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
         done();
+    });
+});
+
+Test('recent Codex function and custom tool activity refreshes an old task without exposing content', function(t, done)
+{
+    const f = fixture(t);
+    const startedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const activeAt = new Date(Date.now() - 1000).toISOString();
+    const cases = [
+        { type: 'function_call', output: false },
+        { type: 'function_call', output: true },
+        { type: 'custom_tool_call', output: false },
+        { type: 'custom_tool_call', output: true }
+    ];
+    cases.forEach(function(item, index)
+    {
+        const call = { type: item.type, call_id: 'call_' + index, name: 'functions.exec\ncommand' };
+        call[item.type === 'function_call' ? 'arguments' : 'input'] = 'PRIVATE INPUT';
+        const records = [
+            { type: 'session_meta', payload: { id: 'tool-' + index } },
+            { type: 'event_msg', timestamp: startedAt, payload: { type: 'task_started' } },
+            { type: 'response_item', timestamp: activeAt, payload: call }
+        ];
+        if (item.output)
+        {
+            records.push({ type: 'response_item', timestamp: activeAt, payload: { type: item.type + '_output', call_id: call.call_id, output: 'PRIVATE OUTPUT' } });
+        }
+        write(Path.join(f.codexRoot, 'sessions', 'rollout-tool-' + index + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
+    });
+    f.create().start(function(error, snapshot)
+    {
+        Assert.ifError(error);
+        cases.forEach(function(item, index)
+        {
+            const node = snapshot.nodes.find(function(node) { return node.id === 'codex:tool-' + index; });
+            Assert.equal(node.status, 'running');
+            Assert.equal(node.lastSeen, activeAt);
+            Assert.equal(I18n.resolve(node.statusEvidence, 'en'), 'Codex tool ' + (item.output ? 'result event' : 'call') + ': functions.exec command');
+        });
+        Assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
+        done();
+    });
+});
+
+Test('Codex reasoning and assistant messages refresh activity while final answers finish the correct node', function(t, done)
+{
+    const f = fixture(t);
+    const startedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const activeAt = new Date(Date.now() - 1000).toISOString();
+    const cases = [
+        { id: 'reasoning', status: 'running', payload: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'PRIVATE REASONING' }], encrypted_content: 'PRIVATE ENCRYPTED' } },
+        { id: 'commentary', status: 'running', payload: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'PRIVATE COMMENTARY' }] } },
+        { id: 'final-root', status: 'idle', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'PRIVATE FINAL' }] } },
+        { id: 'final-child', status: 'completed', parent: 'final-root', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'PRIVATE CHILD FINAL' }] } }
+    ];
+    cases.forEach(function(item)
+    {
+        const records = [
+            { type: 'session_meta', payload: { id: item.id, parent_thread_id: item.parent } },
+            { type: 'event_msg', timestamp: startedAt, payload: { type: 'task_started' } },
+            { type: 'response_item', timestamp: activeAt, payload: item.payload }
+        ];
+        write(Path.join(f.codexRoot, 'sessions', 'rollout-' + item.id + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
+    });
+    f.create().start(function(error, snapshot)
+    {
+        Assert.ifError(error);
+        cases.forEach(function(item)
+        {
+            const node = snapshot.nodes.find(function(node) { return node.id === 'codex:' + item.id; });
+            Assert.equal(node.status, item.status, item.id);
+            Assert.equal(node.lastSeen, activeAt, item.id);
+        });
+        Assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
+        done();
+    });
+});
+
+Test('Codex approval and user-input waits remain waiting until a new turn or tool result arrives', function(t, done)
+{
+    const f = fixture(t);
+    const startedAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    const waitingAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const cases = [
+        { id: 'approval', recordType: 'event_msg', payload: { type: 'approval_requested' }, resumed: { type: 'event_msg', payload: { type: 'turn_started' } } },
+        { id: 'input-event', recordType: 'event_msg', payload: { type: 'request_user_input' }, resumed: { type: 'event_msg', payload: { type: 'task_started' } } },
+        { id: 'input-function', recordType: 'response_item', payload: { type: 'function_call', name: 'functions.request_user_input', call_id: 'function_input', arguments: 'PRIVATE QUESTION' }, resumed: { type: 'response_item', payload: { type: 'function_call_output', call_id: 'function_input', output: 'PRIVATE ANSWER' } } },
+        { id: 'input-custom', recordType: 'response_item', payload: { type: 'custom_tool_call', name: 'functions.request_user_input', call_id: 'custom_input', input: 'PRIVATE QUESTION' }, resumed: { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'custom_input', output: 'PRIVATE ANSWER' } } }
+    ];
+    cases.forEach(function(item)
+    {
+        const records = [
+            { type: 'session_meta', payload: { id: item.id } },
+            { type: 'event_msg', timestamp: startedAt, payload: { type: 'task_started' } },
+            { type: item.recordType, timestamp: waitingAt, payload: item.payload }
+        ];
+        write(Path.join(f.codexRoot, 'sessions', 'rollout-' + item.id + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
+    });
+    const collector = f.create();
+    collector.start(function(error, snapshot)
+    {
+        Assert.ifError(error);
+        cases.forEach(function(item)
+        {
+            const node = snapshot.nodes.find(function(node) { return node.id === 'codex:' + item.id; });
+            Assert.equal(node.status, 'waiting', item.id);
+            Assert.equal(node.lastSeen, waitingAt, item.id);
+        });
+        Assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
+        const resumedAt = now();
+        cases.forEach(function(item)
+        {
+            item.resumed.timestamp = resumedAt;
+            Fs.appendFileSync(Path.join(f.codexRoot, 'sessions', 'rollout-' + item.id + '.jsonl'), JSON.stringify(item.resumed) + '\n');
+        });
+        until(function()
+        {
+            return collector.snapshot().nodes.every(function(node) { return node.status === 'running' && node.lastSeen === resumedAt; });
+        }, function(resumeError)
+        {
+            Assert.ifError(resumeError);
+            Assert.doesNotMatch(JSON.stringify(collector.snapshot()), /PRIVATE/);
+            done();
+        });
+    });
+});
+
+Test('incremental Codex custom tools and reasoning restore stale running sessions immediately', function(t, done)
+{
+    const f = fixture(t);
+    const startedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const activeAt = new Date(Date.now() - 1000).toISOString();
+    const cases = [
+        { id: 'live-tool', payload: { type: 'custom_tool_call', name: 'functions.exec', call_id: 'live_call', input: 'PRIVATE INPUT' } },
+        { id: 'live-reasoning', payload: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'PRIVATE REASONING' }] } }
+    ];
+    cases.forEach(function(item)
+    {
+        const records = [
+            { type: 'session_meta', payload: { id: item.id } },
+            { type: 'event_msg', timestamp: startedAt, payload: { type: 'task_started' } }
+        ];
+        write(Path.join(f.codexRoot, 'sessions', 'rollout-' + item.id + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
+    });
+    const collector = f.create();
+    collector.start(function(error, snapshot)
+    {
+        Assert.ifError(error);
+        Assert.equal(snapshot.nodes.length, cases.length);
+        snapshot.nodes.forEach(function(node) { Assert.equal(node.status, 'unknown'); });
+        cases.forEach(function(item)
+        {
+            Fs.appendFileSync(Path.join(f.codexRoot, 'sessions', 'rollout-' + item.id + '.jsonl'), JSON.stringify({ type: 'response_item', timestamp: activeAt, payload: item.payload }) + '\n');
+        });
+        until(function()
+        {
+            return collector.snapshot().nodes.every(function(node) { return node.status === 'running' && node.lastSeen === activeAt; });
+        }, function(activityError)
+        {
+            Assert.ifError(activityError);
+            const outputAt = now();
+            Fs.appendFileSync(Path.join(f.codexRoot, 'sessions', 'rollout-live-tool.jsonl'), JSON.stringify({ type: 'response_item', timestamp: outputAt, payload: { type: 'custom_tool_call_output', call_id: 'live_call', output: 'PRIVATE OUTPUT' } }) + '\n');
+            until(function()
+            {
+                const node = collector.snapshot().nodes.find(function(node) { return node.id === 'codex:live-tool'; });
+                return node.status === 'running' && node.lastSeen === outputAt && I18n.resolve(node.statusEvidence, 'en') === 'Codex tool result event: functions.exec';
+            }, function(outputError)
+            {
+                Assert.ifError(outputError);
+                Assert.doesNotMatch(JSON.stringify(collector.snapshot()), /PRIVATE/);
+                done();
+            });
+        });
     });
 });
 

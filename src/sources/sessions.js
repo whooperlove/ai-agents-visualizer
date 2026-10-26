@@ -5,6 +5,7 @@ const Fs = require('node:fs');
 const Os = require('node:os');
 const Path = require('node:path');
 const Reader = require('./reader');
+const ClaudeRuntime = require('./claude-runtime');
 const I18n = require('../i18n');
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
@@ -163,6 +164,7 @@ function createSessionCollector(config, onChange)
     // so renames that happen while observing are remembered here and merged into the chain.
     const seenNameDic = Object.create(null);
     var accountAssignmentDic = Object.create(null);
+    var claudeRuntime = [];
     var watchers = [];
     var watchingDic = Object.create(null);
     var timer = null;
@@ -372,7 +374,7 @@ function createSessionCollector(config, onChange)
                                 foundDic[accountConfigPath] = { path: accountConfigPath, provider: 'claude', kind: 'accounts', sources: [] };
                                 watch(Path.dirname(accountConfigPath));
                             }
-                            callback(foundDic);
+                            callback(foundDic, roots);
                         });
                     });
                 });
@@ -524,7 +526,8 @@ function createSessionCollector(config, onChange)
         {
             setEvent(state, 'running', 'Claude api-request', record.timestamp);
         }
-        else if (record.type === 'user')
+        // A queued prompt can be written to the transcript before the session actually consumes it.
+        else if (record.type === 'user' && record.queueTranscriptOnly !== true)
         {
             setEvent(state, 'running', I18n.token('msg.evidence.claudeUserEvent'), record.timestamp);
         }
@@ -611,7 +614,7 @@ function createSessionCollector(config, onChange)
                 setEvent(state, 'waiting', 'Codex ' + type, record.timestamp);
             }
         }
-        if (record.type === 'response_item' && payload.type === 'function_call')
+        if (record.type === 'response_item' && (payload.type === 'function_call' || payload.type === 'custom_tool_call'))
         {
             const waiting = /(^|[._])request_user_input$/.test(payload.name || '');
             const name = safeText(payload.name, 100);
@@ -620,17 +623,26 @@ function createSessionCollector(config, onChange)
             {
                 state.toolNameDic[callId] = name;
             }
-            setEvent(state, waiting ? 'waiting' : 'running', name ? I18n.token('msg.evidence.codexToolCall', { name: name }) : 'Codex function_call', record.timestamp);
+            setEvent(state, waiting ? 'waiting' : 'running', name ? I18n.token('msg.evidence.codexToolCall', { name: name }) : 'Codex ' + payload.type, record.timestamp);
         }
-        if (record.type === 'response_item' && payload.type === 'function_call_output')
+        if (record.type === 'response_item' && (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output'))
         {
             const callId = safeIdentifier(payload.call_id);
             const name = callId ? state.toolNameDic[callId] : null;
-            setEvent(state, 'running', name ? I18n.token('msg.evidence.codexToolResult', { name: name }) : 'Codex function_call_output', record.timestamp);
+            setEvent(state, 'running', name ? I18n.token('msg.evidence.codexToolResult', { name: name }) : 'Codex ' + payload.type, record.timestamp);
             if (callId)
             {
                 delete state.toolNameDic[callId];
             }
+        }
+        if (record.type === 'response_item' && payload.type === 'reasoning')
+        {
+            setEvent(state, 'running', I18n.token('msg.evidence.codexReasoning'), record.timestamp);
+        }
+        if (record.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant')
+        {
+            const status = payload.phase === 'final_answer' ? (data.agent ? 'completed' : 'idle') : 'running';
+            setEvent(state, status, I18n.token(payload.phase === 'final_answer' ? 'msg.evidence.codexFinalAnswer' : 'msg.evidence.codexAssistantEvent'), record.timestamp);
         }
     }
 
@@ -849,7 +861,21 @@ function createSessionCollector(config, onChange)
             return;
         }
         scanning = true;
-        discover(function(foundDic)
+        discover(function(foundDic, roots)
+        {
+            ClaudeRuntime.readClaudeRuntime(roots, function(error, records)
+            {
+                if (!running)
+                {
+                    scanning = false;
+                    return;
+                }
+                claudeRuntime = error ? [] : records;
+                claudeRuntime.forEach(function(record) { watch(Path.dirname(record.path)); });
+                readFound(foundDic);
+            });
+        });
+        function readFound(foundDic)
         {
             if (!running)
             {
@@ -937,13 +963,27 @@ function createSessionCollector(config, onChange)
                     setImmediate(scan);
                 }
             });
-        });
+        }
     }
 
     function snapshot()
     {
         const nodeDic = Object.create(null);
         const parentDic = Object.create(null);
+        const runtimeDic = Object.create(null);
+        const runtimeStatuses = { busy: 'running', idle: 'idle', waiting: 'waiting', shell: 'idle' };
+        claudeRuntime.forEach(function(record)
+        {
+            if (Date.now() - Date.parse(record.observedAt) > Math.max(ACTIVE_WINDOW_MS, pollIntervalMs * 2))
+            {
+                return;
+            }
+            if (!runtimeDic[record.sessionId])
+            {
+                runtimeDic[record.sessionId] = [];
+            }
+            runtimeDic[record.sessionId].push(record);
+        });
         const stats = { files: 0, nodes: 0, edges: 0, bytesRead: 0, skippedHistoryBytes: 0, malformedLines: 0, oversizedLines: 0, scans: completedScans, lastScanAt: lastScanAt, loading: completedScans === 0, scanning: scanning };
         Object.keys(fileDic).sort().forEach(function(filePath)
         {
@@ -1078,7 +1118,25 @@ function createSessionCollector(config, onChange)
             {
                 node.project = Path.basename(node.cwd);
             }
-            if ((node.status === 'running' || node.status === 'waiting') &&
+            const liveRecords = node.provider === 'claude' && node.kind === 'session' ? runtimeDic[node.sessionId] || [] : [];
+            const liveStatus = liveRecords.length ? runtimeStatuses[liveRecords[0].status] : null;
+            if (liveStatus && liveRecords.every(function(record) { return runtimeStatuses[record.status] === liveStatus; }))
+            {
+                node.status = liveStatus;
+                node.statusEvidence = liveRecords.map(function(record)
+                {
+                    return I18n.token('msg.evidence.claudeRuntimeStatus', { status: record.status, pid: String(record.pid) });
+                }).join(' · ');
+                liveRecords.forEach(function(record)
+                {
+                    if (!node.lastSeen || record.observedAt > node.lastSeen)
+                    {
+                        node.lastSeen = record.observedAt;
+                    }
+                    node.sources.push({ kind: 'claude-runtime', path: record.path, detail: I18n.token('msg.evidence.claudeRuntimeStatus', { status: record.status, pid: String(record.pid) }) });
+                });
+            }
+            if (node.status === 'running' &&
                 (!node.lastSeen || Date.now() - Date.parse(node.lastSeen) > ACTIVE_WINDOW_MS))
             {
                 node.status = 'unknown';
@@ -1172,6 +1230,7 @@ function createSessionCollector(config, onChange)
         });
         fileDic = Object.create(null);
         accountAssignmentDic = Object.create(null);
+        claudeRuntime = [];
     }
 
     return { start: start, stop: stop, snapshot: snapshot };

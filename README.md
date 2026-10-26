@@ -85,14 +85,16 @@ Activity scope and run status are separate pieces of information. An old record 
 
 | Activity scope | Classified by |
 | --- | --- |
-| Recent activity | Events within the last 2 hours. This does not mean the session is running now |
+| Recent activity | Events or verified Claude runtime observations within the last 2 hours. This does not mean the session is running now |
 | Inactive / past | Completed or stopped sub-agents, sessions with no new event for over 2 hours, and entries marked `archived: true` in a supplement JSON |
 | Unknown | No last-event time, or a future timestamp that cannot be trusted |
 | All | Everything above |
 
 The default recent-activity view leaves out past nodes and stale collaboration or document-derived relations, and shows how many were left out. If a recent child's parent is inactive, the parent stays as context so the hierarchy remains understandable. A completed agent is always classified as inactive, even if it completed recently. Old records and explicitly retired sessions are never deleted.
 
-`running` and `waiting` are inferred from recent events and turn into `unknown` when the status evidence has not been refreshed for more than 2 minutes. `idle` means the last turn ended; `completed` means there is evidence the agent finished. None of these guarantee that the process is alive or that a VS Code panel is open. A bridge's `queued` and `delivered` describe message delivery and do not change a session's run status. Even when a reply is recorded, the tool does not judge whether the requested work succeeded.
+Claude's native runtime records under `~/.claude/sessions` and `~/.claude-accounts/*/sessions` take precedence for root sessions when their PID and process start time match a live process. Runtime `busy` means `running`, `waiting` means `waiting`, and `idle` / `shell` mean `idle`. Each verified observation refreshes the last-observed time, so a long API request stays running even when the transcript has no new lines. A deleted record, a dead process, a reused PID or conflicting runtime states falls back to transcript evidence. A root's runtime state never overrides its sub-agents.
+
+Without verified runtime evidence, `running` is inferred from recent execution events and turns into `unknown` after 2 minutes without refreshed evidence. Codex reasoning, assistant messages and both function and custom tool calls/results refresh that evidence; an assistant message with `phase: final_answer` records the end of a turn. An explicit `waiting` event remains waiting until a later execution, completion or interruption event arrives. `idle` means the last turn ended; `completed` means there is evidence the agent finished. Log-only statuses do not guarantee that the process is alive or that a VS Code panel is open. A bridge's `queued` and `delivered` describe message delivery and do not change a session's run status. Claude user records marked `queueTranscriptOnly: true` likewise do not start a turn or replace its last execution evidence. Even when a reply is recorded, the tool does not judge whether the requested work succeeded.
 
 ## Navigation
 
@@ -165,7 +167,7 @@ The tool reads these locations under the home directory. Anything that does not 
 
 | Kind | Path and what is collected |
 | --- | --- |
-| Claude | JSONL files under `~/.claude/projects` and (if you keep extra account directories) `~/.claude-accounts/*/projects`; `custom-title.json`; `subagents/agent-*.meta.json` |
+| Claude | JSONL files under `~/.claude/projects` and (if you keep extra account directories) `~/.claude-accounts/*/projects`; `custom-title.json`; `subagents/agent-*.meta.json`; sibling `sessions/<pid>.json` runtime records, verified against read-only process start times |
 | Account assignment | Only the session ID → profile name map in `~/.config/claude-multi-accounts/claude-accounts.json`, if present |
 | Codex | Rollout files under `~/.codex/sessions` and `~/.codex/session_index.jsonl` |
 | Collaboration | `~/.cross-agent/registry.json`, `~/.cross-agent/deliveries` and `in-flight`, written by a local cross-agent message bridge, if you use one |
