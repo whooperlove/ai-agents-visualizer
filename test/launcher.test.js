@@ -223,7 +223,7 @@ function shellFixture(t)
     const root = Path.join(fixture(t), 'launcher path with spaces');
     const bin = Path.join(root, 'bin');
     Fs.mkdirSync(bin, { recursive: true });
-    ['launch.sh', 'launch-browser.sh', 'launch-messages.sh', 'launcher.js'].forEach(function(name)
+    ['launch.sh', 'launch-browser.sh', 'launch-messages.sh', 'launcher.js', 'stop.sh'].forEach(function(name)
     {
         Fs.copyFileSync(Path.join(__dirname, '..', 'bin', name), Path.join(bin, name));
     });
@@ -238,6 +238,7 @@ function shellFixture(t)
         root: root,
         launch: Path.join(bin, 'launch.sh'),
         browser: Path.join(bin, 'launch-browser.sh'),
+        stop: Path.join(bin, 'stop.sh'),
         // Korean unless a test picks another language: the Korean assertions below predate the English texts.
         env: Object.assign({}, process.env, NO_LOCALE, {
             WAS_LANG: 'ko',
@@ -504,4 +505,155 @@ Test('a missing Node executable fails before any GUI automation', function(t)
     Assert.equal(english.status, 1);
     Assert.equal(english.stderr.trim(), 'Could not find Node.js 22 or later. Install Node.js or check your PATH.');
     Assert.equal(Fs.existsSync(f.env.VISUALIZER_TEST_AS_PATH), false);
+});
+
+// stop.sh talks to the server through curl and to the kernel through lsof; both are mocked so that no test ever
+// touches a real visualizer on port 4317. The signalled process is a real, throwaway one owned by the test.
+function stopFixture(t)
+{
+    const f = shellFixture(t);
+    const bin = Path.join(f.root, 'bin');
+    Fs.writeFileSync(Path.join(bin, 'curl'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$VISUALIZER_TEST_CURL_ARGS_PATH"\nif [ "${VISUALIZER_TEST_CURL_EXIT-0}" != 0 ]; then exit "$VISUALIZER_TEST_CURL_EXIT"; fi\nprintf "%s" "$VISUALIZER_TEST_HEALTH"\n', { mode: 0o700 });
+    // Like the real lsof, it lists the listener only while that process is alive.
+    Fs.writeFileSync(Path.join(bin, 'lsof'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$VISUALIZER_TEST_LSOF_ARGS_PATH"\nif kill -0 "$VISUALIZER_TEST_LISTENER_PID" 2>/dev/null; then printf "%s\\n" "$VISUALIZER_TEST_LISTENER_PID"; fi\n', { mode: 0o700 });
+    f.env.VISUALIZER_TEST_CURL_ARGS_PATH = Path.join(f.root, 'curl-args.txt');
+    f.env.VISUALIZER_TEST_LSOF_ARGS_PATH = Path.join(f.root, 'lsof-args.txt');
+    return f;
+}
+
+function isAlive(pid)
+{
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+}
+
+// Starts a background process whose parent exits at once, so it is reaped by init and never lingers as a zombie.
+function spawnTarget(t, command)
+{
+    const result = ChildProcess.spawnSync('/bin/sh', ['-c', command + ' >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' });
+    const pid = Number(result.stdout.trim());
+    Assert.ok(Number.isInteger(pid) && pid > 0, result.stderr);
+    t.after(function()
+    {
+        try { process.kill(pid, 'SIGKILL'); }
+        catch (error) { if (error.code !== 'ESRCH') throw error; }
+    });
+    return pid;
+}
+
+function healthBody(pid, changes)
+{
+    return JSON.stringify(Object.assign({ app: 'ai-agents-visualizer', processId: pid, ok: true, version: 1, loading: false, host: '127.0.0.1', readOnly: true }, changes || {}));
+}
+
+Test('stop.sh stops the process that answers as this visualizer and listens on its port', function(t)
+{
+    const f = stopFixture(t);
+    const pid = spawnTarget(t, 'sleep 30');
+    f.env.VISUALIZER_TEST_HEALTH = healthBody(pid);
+    f.env.VISUALIZER_TEST_LISTENER_PID = String(pid);
+    const result = runShell(f, f.stop);
+    Assert.equal(result.status, 0, result.stderr);
+    Assert.equal(result.stdout.trim(), 'visualizer 서버를 중지했습니다 (프로세스 ' + pid + ').');
+    Assert.equal(isAlive(pid), false);
+    Assert.deepEqual(Fs.readFileSync(f.env.VISUALIZER_TEST_CURL_ARGS_PATH, 'utf8').trim().split('\n'), ['-s', '--max-time', '2', 'http://127.0.0.1:4317/api/health']);
+    Assert.deepEqual(Fs.readFileSync(f.env.VISUALIZER_TEST_LSOF_ARGS_PATH, 'utf8').trim().split('\n'), ['-nP', '-t', '-iTCP:4317', '-sTCP:LISTEN']);
+    const englishPid = spawnTarget(t, 'sleep 30');
+    const english = runShell(f, f.stop, [], { WAS_LANG: 'en', VISUALIZER_TEST_HEALTH: healthBody(englishPid), VISUALIZER_TEST_LISTENER_PID: String(englishPid) });
+    Assert.equal(english.status, 0, english.stderr);
+    Assert.equal(english.stdout.trim(), 'Stopped the visualizer server (process ' + englishPid + ').');
+    Assert.doesNotMatch(english.stdout, /[ᄀ-ᇿ㄰-㆏가-힯]/);
+    Assert.equal(isAlive(englishPid), false);
+});
+
+Test('stop.sh treats a refused connection as already stopped and signals nothing', function(t)
+{
+    const f = stopFixture(t);
+    const bystander = spawnTarget(t, 'sleep 30');
+    f.env.VISUALIZER_TEST_CURL_EXIT = '7';
+    f.env.VISUALIZER_TEST_LISTENER_PID = String(bystander);
+    const result = runShell(f, f.stop);
+    Assert.equal(result.status, 0, result.stderr);
+    Assert.equal(result.stdout.trim(), '4317 포트에서 실행 중인 visualizer 서버가 없습니다.');
+    const english = runShell(f, f.stop, [], { WAS_LANG: 'en' });
+    Assert.equal(english.status, 0, english.stderr);
+    Assert.equal(english.stdout.trim(), 'No visualizer server is running on port 4317.');
+    Assert.equal(isAlive(bystander), true);
+    Assert.equal(Fs.existsSync(f.env.VISUALIZER_TEST_LSOF_ARGS_PATH), false);
+    const failed = runShell(f, f.stop, [], { VISUALIZER_TEST_CURL_EXIT: '28' });
+    Assert.equal(failed.status, 1);
+    Assert.equal(failed.stderr.trim(), '4317 포트의 서버가 상태 확인에 응답하지 않았습니다. 아무것도 중지하지 않았습니다.');
+    Assert.equal(isAlive(bystander), true);
+});
+
+Test('stop.sh leaves a port held by another service alone', function(t)
+{
+    const f = stopFixture(t);
+    const bystander = spawnTarget(t, 'sleep 30');
+    f.env.VISUALIZER_TEST_LISTENER_PID = String(bystander);
+    [
+        healthBody(bystander, { app: undefined }),
+        healthBody(bystander, { readOnly: false }),
+        healthBody(bystander, { host: '0.0.0.0' }),
+        healthBody(0),
+        'hello',
+        ''
+    ].forEach(function(body)
+    {
+        const result = runShell(f, f.stop, [], { VISUALIZER_TEST_HEALTH: body });
+        Assert.equal(result.status, 1, body);
+        Assert.equal(result.stderr.trim(), '4317 포트를 이 visualizer가 아닌 다른 프로세스가 사용 중입니다. 아무것도 중지하지 않았습니다.', body);
+        Assert.equal(isAlive(bystander), true, body);
+    });
+    Assert.equal(Fs.existsSync(f.env.VISUALIZER_TEST_LSOF_ARGS_PATH), false);
+    const english = runShell(f, f.stop, [], { WAS_LANG: 'en', VISUALIZER_TEST_HEALTH: 'hello' });
+    Assert.equal(english.status, 1);
+    Assert.equal(english.stderr.trim(), 'Port 4317 is in use by something other than this visualizer. Nothing was stopped.');
+});
+
+Test('stop.sh refuses a process id that the port listener does not confirm', function(t)
+{
+    const f = stopFixture(t);
+    const named = spawnTarget(t, 'sleep 30');
+    // The health answer names `named`, but the kernel says another process owns the port.
+    f.env.VISUALIZER_TEST_HEALTH = healthBody(named);
+    f.env.VISUALIZER_TEST_LISTENER_PID = String(process.pid);
+    const result = runShell(f, f.stop);
+    Assert.equal(result.status, 1);
+    Assert.equal(result.stderr.trim(), '4317 포트를 듣고 있는 프로세스를 확인하지 못했습니다 (lsof가 필요합니다). 아무것도 중지하지 않았습니다.');
+    Assert.equal(isAlive(named), true);
+    const english = runShell(f, f.stop, [], { WAS_LANG: 'en' });
+    Assert.equal(english.status, 1);
+    Assert.equal(english.stderr.trim(), 'Could not confirm which process listens on port 4317 (lsof is required). Nothing was stopped.');
+    Assert.equal(isAlive(named), true);
+});
+
+Test('stop.sh does not claim success while the process keeps listening after SIGTERM', function(t)
+{
+    const f = stopFixture(t);
+    const stubborn = spawnTarget(t, "sh -c 'trap \"\" TERM; while :; do sleep 1; done'");
+    f.env.VISUALIZER_TEST_HEALTH = healthBody(stubborn);
+    f.env.VISUALIZER_TEST_LISTENER_PID = String(stubborn);
+    const result = runShell(f, f.stop);
+    Assert.equal(result.status, 1);
+    Assert.equal(result.stdout, '');
+    Assert.equal(result.stderr.trim(), '프로세스 ' + stubborn + '가 종료 신호(SIGTERM) 후 제때 종료되지 않았습니다. 강제로 끝내려면: kill -9 ' + stubborn);
+    Assert.equal(isAlive(stubborn), true);
+});
+
+Test('stop.sh prints its usage and rejects options before contacting the server', function(t)
+{
+    const f = stopFixture(t);
+    const usage = runShell(f, f.stop, ['--help']);
+    Assert.equal(usage.status, 0, usage.stderr);
+    Assert.equal(usage.stdout.split('\n')[0], '사용법: ' + Path.join(f.root, 'bin') + '/stop.sh');
+    const english = runShell(f, f.stop, ['-h'], { WAS_LANG: 'en' });
+    Assert.equal(english.status, 0, english.stderr);
+    Assert.equal(english.stdout.split('\n')[0], 'Usage: ' + Path.join(f.root, 'bin') + '/stop.sh');
+    Assert.doesNotMatch(english.stdout, /[ᄀ-ᇿ㄰-㆏가-힯]/);
+    const rejected = runShell(f, f.stop, ['--now']);
+    Assert.equal(rejected.status, 1);
+    Assert.equal(rejected.stderr.trim(), 'stop.sh는 옵션 없이 실행해주세요.');
+    Assert.equal(runShell(f, f.stop, ['--now'], { WAS_LANG: 'en' }).stderr.trim(), 'Run stop.sh without options.');
+    Assert.equal(Fs.existsSync(f.env.VISUALIZER_TEST_CURL_ARGS_PATH), false);
 });

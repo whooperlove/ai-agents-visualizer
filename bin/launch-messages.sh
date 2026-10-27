@@ -1,4 +1,4 @@
-# Language selection and the user-visible messages of launch.sh and launch-browser.sh.
+# Language selection and the user-visible messages of launch.sh, launch-browser.sh and stop.sh.
 # Sourced with `.` by those scripts; never run directly. The scripts themselves hold no
 # natural-language text: every message, English and Korean, lives in visualizer_text below.
 
@@ -91,6 +91,34 @@ visualizer_text() {
         ko:vscode_browser) printf '%s\n' "기본 브라우저로 열기: $2/launch-browser.sh" ;;
         en:vscode_sent) printf '%s\n' "Sent the open command to the current VS Code window's integrated browser." ;;
         ko:vscode_sent) printf '%s\n' '현재 VS Code 창의 내장 브라우저에 열기 명령을 보냈습니다.' ;;
+        en:help_stop)
+            printf '%s\n' "Usage: $2/stop.sh"
+            printf '%s\n' 'Stops the visualizer server that launch.sh started. Only a process that answers as this visualizer and listens on its port gets SIGTERM; anything else is left unchanged.'
+            printf '%s\n' 'Language: set WAS_LANG=en or WAS_LANG=ko (otherwise LC_ALL, LC_MESSAGES and LANG decide; default: English)'
+            ;;
+        ko:help_stop)
+            printf '%s\n' "사용법: $2/stop.sh"
+            printf '%s\n' 'launch.sh가 시작한 visualizer 서버를 중지합니다. 이 visualizer로 응답하고 해당 포트를 듣고 있는 프로세스에만 종료 신호(SIGTERM)를 보내며, 그 밖의 프로세스는 변경하지 않습니다.'
+            printf '%s\n' '언어: WAS_LANG=en 또는 WAS_LANG=ko로 지정 (없으면 LC_ALL, LC_MESSAGES, LANG 순서로 판단, 기본값은 영어)'
+            ;;
+        en:stop_no_options) printf '%s\n' 'Run stop.sh without options.' ;;
+        ko:stop_no_options) printf '%s\n' 'stop.sh는 옵션 없이 실행해주세요.' ;;
+        en:curl_missing) printf '%s\n' 'Could not find the curl command.' ;;
+        ko:curl_missing) printf '%s\n' 'curl 명령을 찾지 못했습니다.' ;;
+        en:not_running) printf '%s\n' "No visualizer server is running on port $2." ;;
+        ko:not_running) printf '%s\n' "$2 포트에서 실행 중인 visualizer 서버가 없습니다." ;;
+        en:health_failed) printf '%s\n' "The server on port $2 did not answer the health check. Nothing was stopped." ;;
+        ko:health_failed) printf '%s\n' "$2 포트의 서버가 상태 확인에 응답하지 않았습니다. 아무것도 중지하지 않았습니다." ;;
+        en:not_visualizer) printf '%s\n' "Port $2 is in use by something other than this visualizer. Nothing was stopped." ;;
+        ko:not_visualizer) printf '%s\n' "$2 포트를 이 visualizer가 아닌 다른 프로세스가 사용 중입니다. 아무것도 중지하지 않았습니다." ;;
+        en:owner_unconfirmed) printf '%s\n' "Could not confirm which process listens on port $2 (lsof is required). Nothing was stopped." ;;
+        ko:owner_unconfirmed) printf '%s\n' "$2 포트를 듣고 있는 프로세스를 확인하지 못했습니다 (lsof가 필요합니다). 아무것도 중지하지 않았습니다." ;;
+        en:kill_failed) printf '%s\n' "Could not send SIGTERM to process $2. Nothing was stopped." ;;
+        ko:kill_failed) printf '%s\n' "프로세스 $2에 종료 신호(SIGTERM)를 보내지 못했습니다. 아무것도 중지하지 않았습니다." ;;
+        en:stop_timeout) printf '%s\n' "Process $2 did not exit in time after SIGTERM. To force it: kill -9 $2" ;;
+        ko:stop_timeout) printf '%s\n' "프로세스 $2가 종료 신호(SIGTERM) 후 제때 종료되지 않았습니다. 강제로 끝내려면: kill -9 $2" ;;
+        en:stopped) printf '%s\n' "Stopped the visualizer server (process $2)." ;;
+        ko:stopped) printf '%s\n' "visualizer 서버를 중지했습니다 (프로세스 $2)." ;;
         *) printf '%s\n' "$1" ;;
     esac
 }

@@ -53,6 +53,14 @@ The default-browser script takes no options and needs neither VS Code nor Access
 
 To open it manually in VS Code: `Cmd+Shift+P` → `Browser: Open Integrated Browser` → `http://127.0.0.1:4317`. On versions without that command, use `Simple Browser: Show` with the same URL.
 
+The server runs detached, so closing the terminal does not stop it. To stop the server that `launch.sh` started:
+
+```sh
+./bin/stop.sh
+```
+
+`bin/stop.sh` takes no options. It sends `SIGTERM` only to a process that answers `http://127.0.0.1:4317/api/health` as this application and is confirmed by `lsof` to be listening on port 4317; a port held by anything else is left alone. It waits until the port is free, and reports success (exit 0) as well when no server is running. If the server does not exit in time it prints the `kill -9` command instead of forcing it. It needs `curl` and `lsof`.
+
 ### Server options
 
 ```sh
@@ -75,7 +83,7 @@ The HTTP API is read-only.
 The web UI and the terminal output are available in English and Korean.
 
 - **Web UI:** the language follows your browser: a Korean browser gets Korean, everything else gets English. Use the language selector at the top right to switch at any time without reloading; the choice is remembered in the browser. Opening `http://127.0.0.1:4317/?lang=ko` or `?lang=en` overrides it for that visit.
-- **Terminal and launcher scripts:** the language comes from `--lang en|ko` (server only), then the `WAS_LANG`, `LC_ALL`, `LC_MESSAGES` and `LANG` environment variables, and defaults to English. `bin/launch.sh` and `bin/launch-browser.sh` follow the same variables and read their messages from `bin/launch-messages.sh`, which must stay next to them.
+- **Terminal and launcher scripts:** the language comes from `--lang en|ko` (server only), then the `WAS_LANG`, `LC_ALL`, `LC_MESSAGES` and `LANG` environment variables, and defaults to English. `bin/launch.sh`, `bin/launch-browser.sh` and `bin/stop.sh` follow the same variables and read their messages from `bin/launch-messages.sh`, which must stay next to them.
 - **What is translated:** every label, tooltip, status and diagnostic the tool produces itself, including the notes the server attaches to sessions (status evidence, conflict and diagnostic messages). Session names, descriptions, paths and anything else that comes from your own records or supplement files is shown as it was recorded.
 - **For contributors:** messages live in `public/locales/*.js` as `{ en, ko }` pairs. `npm test` checks that both languages have the same keys and placeholders, that every key used in the code exists, and that no Korean text is hard-coded in the source files.
 

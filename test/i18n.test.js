@@ -191,7 +191,7 @@ Test('keys used by the sources exist in both languages', function()
 Test('source files contain no hard-coded Korean text', function()
 {
   // bin/launch-messages.sh is the shell scripts' own two-language message table, so it is not scanned.
-  const files = ['public/index.html', 'public/app.js', 'public/office-scene.js', 'public/office-model.js', 'public/character-model.js', 'server.js', 'bin/launcher.js', 'bin/launch.sh', 'bin/launch-browser.sh', 'scripts/verify-live.js', 'schema/supplement.schema.json', 'examples/demo.json']
+  const files = ['public/index.html', 'public/app.js', 'public/office-scene.js', 'public/office-model.js', 'public/character-model.js', 'server.js', 'bin/launcher.js', 'bin/launch.sh', 'bin/launch-browser.sh', 'bin/stop.sh', 'scripts/verify-live.js', 'schema/supplement.schema.json', 'examples/demo.json']
     .concat(listFiles('src', /\.js$/), listFiles('src/sources', /\.js$/));
   // The language names in the selector are endonyms and must stay in their own script.
   const ENDONYM = '<option value="ko">한국어</option>';
