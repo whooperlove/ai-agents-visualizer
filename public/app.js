@@ -8,6 +8,8 @@ var wasCanvasFontFamily = "-apple-system, BlinkMacSystemFont, \"SF Pro Text\", \
 var wasKnownStatuses = ["running", "waiting", "idle", "completed", "interrupted", "unknown"];
 var wasKnownTypes = ["management", "dependency", "spawn", "collaboration", "handoff"];
 var wasRouteRadius = 12;
+/* Browser storage key of the viewer's choices (filters, view, selection, ...); it lives in localStorage so it survives a closed tab and a restarted server. */
+var wasPreferencesKey = "was_observatory_preferences";
 /* Distance from one card to the next in the spawn hierarchy layout: the card plus twice the former gap. */
 var wasNativeStep = { x: 322, y: 139 };
 
@@ -1299,6 +1301,50 @@ function wasReadFilters()
   };
 }
 
+function wasSnapshotLoading()
+{
+  return !!(wasState.snapshot && wasState.snapshot.stats && wasState.snapshot.stats.loading);
+}
+
+/* A project or provider select only has the "all" option until the first snapshot arrives, so it reads empty while the saved choice still waits in savedFilters. */
+function wasPreferenceFilters()
+{
+  var filters = wasReadFilters();
+  ["project", "provider"].forEach(function (name)
+  {
+    if (!filters[name] && typeof wasState.savedFilters[name] === "string")
+    {
+      filters[name] = wasState.savedFilters[name];
+    }
+  });
+  return filters;
+}
+
+/* The expanded branches of sessions that are gone are not kept, so the list does not grow forever; while the server still scans, nothing is dropped. */
+function wasPreferenceExpanded()
+{
+  var ids = Array.from(wasState.expanded || []);
+  if (wasState.model && !wasSnapshotLoading())
+  {
+    ids = ids.filter(function (id) { return wasState.model.nodeMap.has(id); });
+  }
+  return ids;
+}
+
+function wasPreferenceRelationsOff()
+{
+  var off = [];
+  wasElements.relationFilters.querySelectorAll("input").forEach(function (input)
+  {
+    if (!input.checked)
+    {
+      off.push(input.value);
+    }
+  });
+  return off;
+}
+
+/* The choices kept in the browser, so that they outlive a closed tab and a restarted server. A selection that the server has not read yet (see wasSettleSelection) is kept as it was. */
 function wasSavePreferences()
 {
   if (wasState.presentation)
@@ -1307,7 +1353,13 @@ function wasSavePreferences()
   }
   try
   {
-    sessionStorage.setItem("was_observatory_preferences", JSON.stringify({ filters: wasReadFilters(), view: wasState.viewMode, edgeScope: wasElements.edgeScope.value, graphLayout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, officeFloorId: wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeOrder: wasElements.officeOrder.value, officeQuiet: wasElements.officeQuiet.checked, sort: wasSortValue() }));
+    var awaited = wasState.awaited || {};
+    var text = JSON.stringify({ filters: wasPreferenceFilters(), view: wasState.viewMode, edgeScope: wasElements.edgeScope.value, graphLayout: wasElements.graphLayout.value, showQuiet: wasElements.showQuiet.checked, officeFloorId: awaited.officeFloorId || wasState.officeFloorId, officeGrouped: wasElements.officeGrouped.checked, officeOrder: wasElements.officeOrder.value, officeQuiet: wasElements.officeQuiet.checked, sort: wasSortValue(), selectedId: wasState.selectedId || awaited.selectedId || null, focusId: wasState.focusId || awaited.focusId || null, expanded: wasPreferenceExpanded(), relationsOff: wasPreferenceRelationsOff() });
+    if (text !== wasState.preferenceText)
+    {
+      localStorage.setItem(wasPreferencesKey, text);
+      wasState.preferenceText = text;
+    }
   }
   catch (error)
   {
@@ -1319,7 +1371,7 @@ function wasRestorePreferences()
 {
   try
   {
-    var preference = JSON.parse(sessionStorage.getItem("was_observatory_preferences") || "null");
+    var preference = JSON.parse(localStorage.getItem(wasPreferencesKey) || "null");
     if (!preference)
     {
       return;
@@ -1345,6 +1397,18 @@ function wasRestorePreferences()
     wasElements.officeOrder.value = wasOfficeOrders.indexOf(preference.officeOrder) !== -1 ? preference.officeOrder : "group";
     wasElements.officeQuiet.checked = preference.officeQuiet !== false;
     wasState.sort = wasParseSort(preference.sort) || wasState.sort;
+    // The sessions are not known yet: the selection is applied when the snapshot has them (see wasSettleSelection).
+    wasState.awaited = {};
+    ["selectedId", "focusId", "officeFloorId"].forEach(function (name)
+    {
+      if (typeof preference[name] === "string" && preference[name])
+      {
+        wasState.awaited[name] = preference[name];
+      }
+    });
+    wasState.expanded = new Set((Array.isArray(preference.expanded) ? preference.expanded : []).filter(function (id) { return typeof id === "string"; }));
+    var off = Array.isArray(preference.relationsOff) ? preference.relationsOff : [];
+    wasElements.relationFilters.querySelectorAll("input").forEach(function (input) { input.checked = off.indexOf(input.value) === -1; });
   }
   catch (error)
   {
@@ -1413,23 +1477,71 @@ function wasUpdateSnapshot(snapshot)
   }
   wasRefreshFilterOptions();
   wasState.savedFilters = {};
-  if (wasState.selectedId && !wasState.model.nodeMap.has(wasState.selectedId))
-  {
-    wasState.selectedId = null;
-  }
-  if (wasState.focusId && !wasState.model.nodeMap.has(wasState.focusId))
-  {
-    wasState.focusId = null;
-  }
+  wasSettleSelection();
   wasState.lastSuccess = Date.now();
   wasState.loadError = null;
   wasUpdateView(false);
+  if (wasState.revealSelected && wasState.selectedId)
+  {
+    wasState.revealSelected = false;
+    wasRevealSelection(wasState.selectedId);
+  }
   if (wasState.viewMode === "office" && wasState.officeScene && observation.fresh.length)
   {
     wasState.officeScene.observe(wasOfficeDeliveryEdges(observation.fresh.map(function (entry) { return entry.edge; })), { replay: false, observedAt: Date.now() });
   }
   wasRenderHealth();
   wasRenderDiagnostics();
+}
+
+/* Keeps the selected and the focused session only while the snapshot has them. A server that has just started is still scanning and sends
+   an empty or partial snapshot, so until the scan ends a missing session is remembered in wasState.awaited and comes back when it shows up. */
+function wasSettleSelection()
+{
+  var loading = wasSnapshotLoading();
+  var awaited = wasState.awaited;
+  ["selectedId", "focusId"].forEach(function (key)
+  {
+    if (wasState[key] && !wasState.model.nodeMap.has(wasState[key]))
+    {
+      if (loading)
+      {
+        awaited[key] = wasState[key];
+      }
+      wasState[key] = null;
+    }
+    if (!wasState[key] && awaited[key] && wasState.model.nodeMap.has(awaited[key]))
+    {
+      wasState[key] = awaited[key];
+      if (key === "selectedId")
+      {
+        wasState.activeId = wasState[key];
+        wasState.revealSelected = true;
+      }
+    }
+    if (!loading || wasState[key] === awaited[key])
+    {
+      delete awaited[key];
+    }
+  });
+}
+
+/* Brings a selection that was just restored into sight, in the way the current view shows it. */
+function wasRevealSelection(id)
+{
+  if (wasState.viewMode === "graph")
+  {
+    wasCenterNode(id);
+  }
+  else if (wasState.viewMode === "tree")
+  {
+    wasScrollToNode(id);
+  }
+  else if (wasState.officeScene && wasState.officeData && wasState.officeData.actorById.has(id) && wasState.officeData.actorById.get(id).floorId === wasState.officeFloorId)
+  {
+    // Selecting an actor on another floor would also switch to that floor and override the remembered floor.
+    wasState.officeScene.select(id, { focus: true });
+  }
 }
 
 function wasUpdateView(resetScroll)
@@ -1567,6 +1679,7 @@ function wasEnsureOffice()
     {
       wasState.officeFloorId = id;
       wasRenderOfficeFloor();
+      wasSavePreferences();
     },
     onTravel: function (info)
     {
@@ -1667,8 +1780,23 @@ function wasUpdateOffice()
   }));
   wasState.officeData.edges = wasOfficeDeliveryEdges(edges);
   wasState.officeFloors = wasState.officeData.floors.filter(function (floor) { return floor.nodeIds.length > 0; });
-  if (!wasState.officeFloors.some(function (floor) { return floor.id === wasState.officeFloorId; }))
+  var wantedFloorId = wasState.awaited.officeFloorId || wasState.officeFloorId;
+  if (wantedFloorId && wasState.officeFloors.some(function (floor) { return floor.id === wantedFloorId; }))
   {
+    wasState.officeFloorId = wantedFloorId;
+    delete wasState.awaited.officeFloorId;
+  }
+  else
+  {
+    // A server that is still scanning may not have read the sessions of that floor yet: the choice is kept until the scan ends.
+    if (wantedFloorId && wasSnapshotLoading())
+    {
+      wasState.awaited.officeFloorId = wantedFloorId;
+    }
+    else
+    {
+      delete wasState.awaited.officeFloorId;
+    }
     wasState.officeFloorId = wasState.officeFloors.length ? wasState.officeFloors[0].id : null;
   }
   // Floor names may be message tokens; the key includes the language so the select is rebuilt when it changes.
@@ -2030,6 +2158,7 @@ function wasSelectNode(id, reveal, moveCamera)
     wasState.officeScene.select(id, { focus: !!moveCamera });
     wasRenderOfficeFloor();
   }
+  wasSavePreferences();
 }
 
 /* Clicking an already selected session closes its detail: the side panel returns to its empty state and the wide-view overlay hides. */
@@ -2049,6 +2178,7 @@ function wasCloseDetail()
   wasRenderDetails();
   wasRefreshGraphSelection(hadPair);
   wasElements.announcement.textContent = wasT("app.announce.detailClosed");
+  wasSavePreferences();
 }
 
 function wasScrollToNode(id)
@@ -4973,6 +5103,11 @@ function wasBindOfficeEvents()
 function wasBindEvents()
 {
   wasBindOfficeEvents();
+  // Once the viewer takes over, a selection that was only waiting for the server's scan to find it is not wanted any more.
+  ["pointerdown", "keydown", "wheel"].forEach(function (name)
+  {
+    document.addEventListener(name, function () { wasState.awaited = {}; }, true);
+  });
   wasElements.showGrid.addEventListener("change", function ()
   {
     try
@@ -5193,6 +5328,7 @@ function wasBindEvents()
   {
     wasUpdateGraphEdges();
     wasRequestGraphDraw();
+    wasSavePreferences();
     if (wasState.viewMode === "office")
     {
       wasStopReplay();
@@ -5579,6 +5715,9 @@ function wasInitialize()
     viewMode: "tree",
     rowHeight: 54,
     savedFilters: {},
+    awaited: {},
+    revealSelected: false,
+    preferenceText: "",
     detailLimit: 20,
     detailRelationType: "",
     diagnosticsLimit: 50,

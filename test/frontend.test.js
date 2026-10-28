@@ -69,10 +69,10 @@ test("retired diagram and dimension preferences migrate to the single character 
   [{ view: "spatial" }, { view: "office3d" }, { view: "office", officeMode: "3d" }].forEach(function (preference)
   {
     var runtime = frontendRuntime();
-    runtime.sessionStorage = { getItem: function () { return JSON.stringify(Object.assign({}, preference, { filters: { project: "alpha", activity: "all" } })); } };
+    runtime.localStorage = { getItem: function (key) { return key === "was_observatory_preferences" ? JSON.stringify(Object.assign({}, preference, { filters: { project: "alpha", activity: "all" } })) : null; } };
     runtime.wasState = { savedFilters: {} };
     runtime.wasElements = {};
-    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeOrder", "officeQuiet"].forEach(function (key)
+    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeOrder", "officeQuiet", "relationFilters"].forEach(function (key)
     {
       runtime.wasElements[key] = runtimeElement();
     });
@@ -99,7 +99,7 @@ test("character snapshots preserve the renderer and full names while delivery me
   runtime.wasRenderOfficeFloor = function () {};
   runtime.wasRenderViewScope = function () {};
   runtime.wasState = {
-    model: frontend.wasBuildModel({ nodes: actors, edges: [delivery] }), snapshot: {}, viewMode: "office", officeFloorId: "first",
+    awaited: {},     model: frontend.wasBuildModel({ nodes: actors, edges: [delivery] }), snapshot: {}, viewMode: "office", officeFloorId: "first",
     reducedMotion: { matches: false }, projectMessages: [delivery],
     officeScene: { setOffice: function (value) { calls.push(value.edges[0].status || "initial"); }, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } }
   };
@@ -121,10 +121,10 @@ test("the seat order of the character stage reaches the office model, survives a
   [["volume", "volume"], ["name", "name"], ["status", "status"], ["bogus", "group"], [undefined, "group"]].forEach(function (pair)
   {
     var runtime = frontendRuntime();
-    runtime.sessionStorage = { getItem: function () { return JSON.stringify({ view: "office", officeOrder: pair[0], filters: { project: "alpha", activity: "all" } }); } };
+    runtime.localStorage = { getItem: function (key) { return key === "was_observatory_preferences" ? JSON.stringify({ view: "office", officeOrder: pair[0], filters: { project: "alpha", activity: "all" } }) : null; } };
     runtime.wasState = { savedFilters: {} };
     runtime.wasElements = {};
-    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeOrder", "officeQuiet"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+    ["search", "status", "kind", "activity", "edgeScope", "graphLayout", "showQuiet", "officeGrouped", "officeOrder", "officeQuiet", "relationFilters"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
     runtime.wasRestorePreferences();
     assert.equal(runtime.wasElements.officeOrder.value, pair[1]);
   });
@@ -138,7 +138,7 @@ test("the seat order of the character stage reaches the office model, survives a
   runtime.wasRenderOfficeFloor = function () {};
   runtime.wasRenderViewScope = function () {};
   runtime.wasState = {
-    model: frontend.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false },
+    awaited: {},     model: frontend.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false },
     officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } }
   };
   runtime.wasElements = {};
@@ -204,7 +204,7 @@ test("phone observations start after a baseline and replay stays in the stage wi
   runtime.wasRequestGraphDraw = function () {};
   runtime.wasSetView = function () { assert.fail("phone replay must stay in the character stage"); };
   runtime.wasUpdateView = function () { runtime.wasState.officeData = { actorById: new Map([["one", {}], ["two", {}]]) }; };
-  runtime.wasState = { snapshot: null, messageState: null, flowPulses: [], savedFilters: {}, viewMode: "office", reducedMotion: { matches: false }, officeScene: { observe: function (edges, options) { observed.push({ edges: edges, options: options }); } } };
+  runtime.wasState = { awaited: {}, snapshot: null, messageState: null, flowPulses: [], savedFilters: {}, viewMode: "office", reducedMotion: { matches: false }, officeScene: { observe: function (edges, options) { observed.push({ edges: edges, options: options }); } } };
   runtime.wasElements = { project: runtimeElement(), provider: runtimeElement(), activity: runtimeElement("recent"), relationFilters: { querySelectorAll: function () { return [{ value: "collaboration" }]; } }, messageFeed: runtimeElement(), replayFlow: runtimeElement(), officeReplay: runtimeElement(), announcement: runtimeElement() };
   runtime.wasUpdateSnapshot({ version: 1, nodes: [node("one"), node("two")], edges: [old] });
   assert.equal(observed.length, 0);
@@ -240,7 +240,7 @@ function phoneScopeRuntime()
   runtime.wasBindOfficeEvents = function () {};
   runtime.wasUpdateView = function () { assert.equal(runtime.wasState.replayStatus, null, "scope must stop replay before rebuilding the view"); };
   runtime.wasState = {
-    viewMode: "office", selectedId: "one", focusId: "one", expanded: new Set(["one"]), flowPulses: [],
+    awaited: {},     viewMode: "office", selectedId: "one", focusId: "one", expanded: new Set(["one"]), flowPulses: [],
     replayStatus: { index: 0, total: 1 }, replayQueue: [], replayTimer: 3,
     reducedMotion: { matches: false, addEventListener: function () {} },
     officeData: { actorById: new Map([["one", {}], ["two", {}]]) },
@@ -1393,8 +1393,7 @@ function pageRuntime(languages)
   runtime.navigator = { languages: languages };
   runtime.location = { search: "" };
   runtime.localStorage = { getItem: function (key) { return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null; }, setItem: function (key, value) { storage[key] = String(value); } };
-  runtime.sessionStorage = { getItem: function () { return null; }, setItem: function () {} };
-  runtime.fetch = function () { return new Promise(function () {}); };
+  runtime.fetch =function () { return new Promise(function () {}); };
   runtime.setInterval = function () { return 0; };
   runtime.setTimeout = function () { return 1; };
   runtime.clearTimeout = function () {};
@@ -1419,7 +1418,7 @@ function pageRuntime(languages)
         if (id === "was-detail") elements[id].appendChild(fakeElement("div"));
         if (id === "was-sidebar-toggle") elements[id].querySelector = function () { return span; };
         if (id === "was-detail-toggle") elements[id].querySelector = function () { return detailSpan; };
-        if (id === "was-relation-filters") elements[id].querySelectorAll = function () { return ["management", "spawn", "dependency", "collaboration", "handoff"].map(function (value) { return { value: value }; }); };
+        if (id === "was-relation-filters") elements[id].querySelectorAll = function () { return ["management", "spawn", "dependency", "collaboration", "handoff"].map(function (value) { return { value: value, checked: true }; }); };
       }
       return elements[id];
     },
@@ -1643,7 +1642,7 @@ test("floor labels render the message tokens of the office model and rebuild whe
   runtime.wasReadFilters = filters;
   runtime.wasRenderViewScope = function () {};
   runtime.wasAutoReplayOffice = function () {};
-  runtime.wasState = { model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false }, projectMessages: [],
+  runtime.wasState = { awaited: {}, model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false }, projectMessages: [],
     officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } } };
   runtime.wasElements = {};
   ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
@@ -1849,7 +1848,7 @@ test("the floor list shows the top floor first while the data and the up / down 
   runtime.wasReadFilters = filters;
   runtime.wasRenderViewScope = function () {};
   runtime.wasAutoReplayOffice = function () {};
-  runtime.wasState = { model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "f1", reducedMotion: { matches: false }, projectMessages: [],
+  runtime.wasState = { awaited: {}, model: runtime.wasBuildModel({ nodes: actors, edges: [] }), snapshot: {}, viewMode: "office", officeFloorId: "f1", reducedMotion: { matches: false }, projectMessages: [],
     officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "f1" }; } } };
   runtime.wasElements = {};
   ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "officeDown", "officeUp", "officeSummary", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
@@ -2020,23 +2019,188 @@ test("the sort select and the column headers share one choice that is announced,
 test("a remembered sort is restored when the page starts and is part of the saved preferences", function ()
 {
   var saved = pageRuntime(["ko"]);
-  saved.sessionStorage = { getItem: function () { return JSON.stringify({ sort: "name:desc", view: "tree" }); }, setItem: function () {} };
+  saved.localStorage = { getItem: function (key) { return key === "was_observatory_preferences" ? JSON.stringify({ sort: "name:desc", view: "tree" }) : null; }, setItem: function () {} };
   saved.wasInitialize();
   assert.equal(sortText(saved), "name:desc");
   assert.equal(saved.elements["was-tree-sort"].value, "name:desc");
 
   var garbled = pageRuntime(["ko"]);
-  garbled.sessionStorage = { getItem: function () { return JSON.stringify({ sort: "name" }); }, setItem: function () {} };
+  garbled.localStorage = { getItem: function (key) { return key === "was_observatory_preferences" ? JSON.stringify({ sort: "name" }) : null; }, setItem: function () {} };
   garbled.wasInitialize();
   assert.equal(sortText(garbled), "recent:desc", "a malformed value keeps the default");
 
   var writes = [];
   var live = pageRuntime(["ko"]);
-  live.sessionStorage = { getItem: function () { return null; }, setItem: function (key, value) { writes.push(JSON.parse(value)); } };
+  live.localStorage = { getItem: function () { return null; }, setItem: function (key, value) { if (key === "was_observatory_preferences") writes.push(JSON.parse(value)); } };
   live.wasInitialize();
   live.wasState.sort = { key: "status", direction: "desc" };
   live.wasSavePreferences();
   assert.equal(writes[writes.length - 1].sort, "status:desc");
+});
+
+/* Objects made inside the page sandbox have another Object prototype; a JSON copy compares by content. */
+function plain(value)
+{
+  return JSON.parse(JSON.stringify(value));
+}
+
+function savedPreferences(runtime)
+{
+  return JSON.parse(runtime.storage.was_observatory_preferences);
+}
+
+function loadingSnapshot(version, nodes)
+{
+  return { version: version, generatedAt: new Date().toISOString(), nodes: nodes || [], edges: [], diagnostics: [], stats: { loading: true }, sourceStatus: [] };
+}
+
+test("the viewer's choices live in localStorage, so a new tab opened after a restart finds them again", function ()
+{
+  var first = startPage(["ko"]);
+  var inputs = ["management", "spawn", "dependency", "collaboration", "handoff"].map(function (value) { return { value: value, checked: value !== "handoff" }; });
+  first.elements["was-relation-filters"].querySelectorAll = function () { return inputs; };
+  first.wasUpdateSnapshot(demoSnapshot(first));
+  first.elements["was-search"].value = "alpha";
+  first.wasState.expanded.add("main");
+  first.wasState.expanded.add("gone-session");
+  first.wasSelectNode("main", false, false);
+  first.wasState.focusId = "main";
+  first.wasUpdateView(false);
+  var saved = savedPreferences(first);
+  assert.equal(saved.selectedId, "main", "the selected session is stored");
+  assert.equal(saved.focusId, "main", "the focused branch is stored");
+  assert.deepEqual(saved.expanded, ["main"], "only branches of sessions that exist are stored");
+  assert.deepEqual(saved.relationsOff, ["handoff"], "the relation types that were switched off are stored");
+  assert.equal(saved.filters.query, "alpha");
+
+  var second = pageRuntime(["ko"]);
+  Object.assign(second.storage, { was_observatory_preferences: first.storage.was_observatory_preferences });
+  var restoredInputs = ["management", "spawn", "dependency", "collaboration", "handoff"].map(function (value) { return { value: value, checked: true }; });
+  second.document.getElementById("was-relation-filters").querySelectorAll = function () { return restoredInputs; };
+  second.wasInitialize();
+  assert.equal(second.elements["was-search"].value, "alpha");
+  assert.equal(second.wasState.expanded.has("main"), true);
+  assert.deepEqual(restoredInputs.filter(function (input) { return !input.checked; }).map(function (input) { return input.value; }), ["handoff"]);
+  assert.equal(second.wasState.selectedId, null, "no session is known before the first snapshot");
+  assert.equal(savedPreferences(second).selectedId, "main", "the page that has not heard from the server yet does not wipe what was stored");
+  assert.equal(savedPreferences(second).focusId, "main");
+
+  second.wasUpdateSnapshot(demoSnapshot(second));
+  assert.equal(second.wasState.selectedId, "main", "the selection returns when the snapshot has the session");
+  assert.equal(second.wasState.focusId, "main");
+  assert.deepEqual(plain(second.wasState.awaited), {});
+  assert.equal(second.wasState.revealSelected, false, "the restored selection was brought into view");
+});
+
+test("a project filter chosen before a reload survives even when the server is still down", function ()
+{
+  var first = startPage(["ko"]);
+  first.wasUpdateSnapshot(demoSnapshot(first));
+  first.elements["was-project"].value = "alpha";
+  first.wasUpdateView(false);
+  assert.equal(savedPreferences(first).filters.project, "alpha");
+
+  var second = pageRuntime(["ko"]);
+  second.storage.was_observatory_preferences = first.storage.was_observatory_preferences;
+  second.wasInitialize();
+  assert.equal(savedPreferences(second).filters.project, "alpha", "the select has no option for it yet, the stored value stays");
+  var third = pageRuntime(["ko"]);
+  third.storage.was_observatory_preferences = second.storage.was_observatory_preferences;
+  third.wasInitialize();
+  assert.equal(third.wasState.savedFilters.project, "alpha", "a second reload still finds it");
+});
+
+test("a server that is still scanning does not clear the selection, the focus or the floor; a finished scan without them does", function ()
+{
+  var runtime = startPage(["ko"]);
+  runtime.wasUpdateSnapshot(demoSnapshot(runtime));
+  runtime.wasSelectNode("main", false, false);
+  runtime.wasState.focusId = "main";
+  runtime.wasUpdateView(false);
+
+  // The server restarted: its first snapshots are empty or partial and flagged as loading.
+  runtime.wasUpdateSnapshot(loadingSnapshot(0));
+  assert.equal(runtime.wasState.selectedId, null, "nothing is selected while the session is unknown");
+  assert.equal(runtime.wasState.focusId, null);
+  assert.equal(savedPreferences(runtime).selectedId, "main", "but the choice is still stored");
+  assert.equal(savedPreferences(runtime).focusId, "main");
+  runtime.wasUpdateSnapshot(loadingSnapshot(1, [node("quiet")]));
+  assert.equal(runtime.wasState.selectedId, null, "a partial snapshot without the session keeps waiting");
+  assert.equal(savedPreferences(runtime).selectedId, "main");
+
+  runtime.wasUpdateSnapshot(Object.assign(demoSnapshot(runtime), { version: 2, stats: { loading: true } }));
+  assert.equal(runtime.wasState.selectedId, "main", "the selection comes back as soon as the session is read");
+  assert.equal(runtime.wasState.focusId, "main");
+  assert.deepEqual(plain(runtime.wasState.awaited), {});
+
+  // Once the scan has finished, a session that is really gone is let go of.
+  runtime.wasUpdateSnapshot(Object.assign(demoSnapshot(runtime), { version: 3, nodes: [node("quiet")], edges: [], stats: { loading: false } }));
+  assert.equal(runtime.wasState.selectedId, null);
+  assert.equal(runtime.wasState.focusId, null);
+  assert.equal(savedPreferences(runtime).selectedId, null);
+  assert.equal(savedPreferences(runtime).focusId, null);
+
+  var gone = startPage(["ko"]);
+  gone.wasUpdateSnapshot(demoSnapshot(gone));
+  gone.wasSelectNode("main", false, false);
+  gone.wasUpdateSnapshot(loadingSnapshot(0));
+  gone.wasUpdateSnapshot(Object.assign(loadingSnapshot(1), { stats: { loading: false } }));
+  assert.deepEqual(plain(gone.wasState.awaited), {}, "a finished scan ends the waiting");
+  assert.equal(savedPreferences(gone).selectedId, null);
+});
+
+test("what the viewer does after a restart replaces the choice that was waiting for the scan", function ()
+{
+  var listeners = {};
+  var runtime = pageRuntime(["ko"]);
+  runtime.document.addEventListener = function (name, callback) { (listeners[name] = listeners[name] || []).push(callback); };
+  runtime.storage.was_observatory_preferences = JSON.stringify({ view: "tree", selectedId: "main", focusId: "main", filters: { activity: "all" } });
+  runtime.wasInitialize();
+  assert.deepEqual(plain(runtime.wasState.awaited), { selectedId: "main", focusId: "main" });
+  listeners.pointerdown.forEach(function (callback) { callback({}); });
+  assert.deepEqual(plain(runtime.wasState.awaited), {}, "a click means the viewer took over");
+  runtime.wasUpdateSnapshot(demoSnapshot(runtime));
+  assert.equal(runtime.wasState.selectedId, null, "so nothing is selected behind the viewer's back");
+  assert.equal(savedPreferences(runtime).selectedId, null);
+});
+
+test("an office floor that the scan has not found yet is kept and shown as soon as it exists", function ()
+{
+  var runtime = frontendRuntime();
+  var actors = [node("one"), node("two")];
+  var floors = [{ id: "first", name: "A", nodeIds: ["one"] }];
+  var current = "first";
+  var switched = [];
+  var office = function () { return { actors: actors, actorById: new Map(actors.map(function (actor) { return [actor.id, actor]; })), floors: floors, floorById: new Map(floors.map(function (floor) { return [floor.id, floor]; })), project: "alpha", stats: { matched: 2, context: 0, hidden: 0 } }; };
+  runtime.WasOfficeModel = { buildOffice: office };
+  runtime.wasReadFilters = filters;
+  runtime.wasRenderOfficeFloor = function () {};
+  runtime.wasRenderViewScope = function () {};
+  runtime.wasState = {
+    awaited: { officeFloorId: "second" }, model: frontend.wasBuildModel({ nodes: actors, edges: [] }), snapshot: { stats: { loading: true } }, viewMode: "office", officeFloorId: null, reducedMotion: { matches: false },
+    officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: current }; }, setFloor: function (id) { current = id; switched.push(id); } }
+  };
+  runtime.wasElements = {};
+  ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+  runtime.wasElements.relationFilters.querySelectorAll = function () { return []; };
+  runtime.wasUpdateOffice();
+  assert.equal(runtime.wasState.officeFloorId, "first", "the stage shows an existing floor meanwhile");
+  assert.equal(runtime.wasState.awaited.officeFloorId, "second", "the wanted floor is remembered");
+  floors = [floors[0], { id: "second", name: "B", nodeIds: ["two"] }];
+  runtime.wasUpdateOffice();
+  assert.equal(runtime.wasState.officeFloorId, "second");
+  assert.deepEqual(plain(runtime.wasState.awaited), {});
+  assert.deepEqual(switched, ["second"]);
+
+  floors = [floors[0]];
+  runtime.wasState.snapshot = { stats: { loading: true } };
+  runtime.wasUpdateOffice();
+  assert.equal(runtime.wasState.officeFloorId, "first");
+  assert.equal(runtime.wasState.awaited.officeFloorId, "second", "the floor vanished while loading: it is awaited again");
+  runtime.wasState.snapshot = { stats: { loading: false } };
+  runtime.wasUpdateOffice();
+  assert.deepEqual(plain(runtime.wasState.awaited), {}, "a finished scan gives the floor up");
+  assert.equal(runtime.wasState.officeFloorId, "first");
 });
 
 test("the status line is a band that slides up over the bottom of the stage and back out with the stage chips, so a call starting or ending never resizes the stage", function ()
