@@ -8,6 +8,9 @@ const STATUSES = ['running', 'waiting', 'idle', 'completed', 'interrupted', 'unk
 const EDGE_TYPES = ['spawn', 'management', 'dependency', 'collaboration', 'handoff'];
 const SOURCE_KEYS = Symbol('sourceKeys');
 const TEXT_LIMIT = 240;
+const GROUP_NAME_LIMIT = 120;
+// The excluded sessions are named in one diagnostic; a longer list is cut here (the counts stay exact).
+const EXCLUDED_LIST_LIMIT = 200;
 // Text that carries message tokens (evidence, diagnostics, source details) is longer than the plain text it renders to,
 // because every token parameter is percent-encoded. Producers bound their parameters before tokenizing.
 const MESSAGE_LIMIT = 2000;
@@ -125,6 +128,223 @@ function addConflict(item, field, values, message)
   }
 }
 
+// Supplement group patterns: * stands for any run of characters, ? for one character, everything else is literal. Case is ignored.
+// The matcher walks the text once and remembers only the last *, so a pattern cannot blow up on a long name.
+function globMatch(pattern, text)
+{
+  var p = 0;
+  var t = 0;
+  var star = -1;
+  var mark = 0;
+  while (t < text.length)
+  {
+    if (p < pattern.length && (pattern[p] === '?' || pattern[p] === text[t])) { p++; t++; }
+    else if (p < pattern.length && pattern[p] === '*') { star = p++; mark = t; }
+    else if (star >= 0) { p = star + 1; t = ++mark; }
+    else return false;
+  }
+  while (p < pattern.length && pattern[p] === '*') p++;
+  return p === pattern.length;
+}
+
+// The logical groups the supplement files define, in the order they are listed. A group id that a later file repeats is ignored.
+function collectGroups(supplements, diagnostics)
+{
+  const groups = [];
+  const seen = new Set();
+  supplements.forEach(function(item)
+  {
+    (Array.isArray(item.document.groups) ? item.document.groups : []).forEach(function(raw)
+    {
+      const id = safeText(raw.id, 200);
+      if (!id) return;
+      if (seen.has(id))
+      {
+        diagnostics.push({ level: 'info', code: 'supplement-group-duplicate', message: I18n.token('msg.diagnostic.groupDuplicate', { id: limitText(id, 160) }), source: sourceMetadata({ kind: 'supplement', path: item.path, detail: id }) });
+        return;
+      }
+      seen.add(id);
+      const group = { id: id, name: safeText(raw.name, GROUP_NAME_LIMIT) || id, rank: Number.isInteger(raw.rank) ? raw.rank : 0, order: groups.length, origin: item.path, members: new Set((Array.isArray(raw.members) ? raw.members : []).map(function(member) { return safeText(member, 2000); })), patterns: (Array.isArray(raw.match) ? raw.match : []).map(function(pattern) { return String(pattern).toLowerCase(); }) };
+      const description = safeText(raw.description, 500);
+      if (description) group.description = description;
+      groups.push(group);
+    });
+  });
+  return groups;
+}
+
+// Puts every session into at most one group. A listed member beats a name pattern; after that the smaller rank wins (the group
+// listed first when ranks tie). Sessions a grouped session spawned natively and no group claims follow their spawn parent, so a
+// tree stays together. Returns the group records the viewer needs: id, name, rank and the optional description.
+function assignGroups(nodes, edges, supplements, diagnostics)
+{
+  const groups = collectGroups(supplements, diagnostics);
+  if (!groups.length) return [];
+  const byId = new Map(groups.map(function(group) { return [group.id, group]; }));
+  const before = function(first, second) { return first.rank - second.rank || first.order - second.order; };
+  nodes.forEach(function(node)
+  {
+    const names = [node.name].concat(node.aliases || []).filter(Boolean).map(function(name) { return name.toLowerCase(); });
+    const explicit = groups.filter(function(group) { return group.members.has(node.id); });
+    const named = groups.filter(function(group) { return !group.members.has(node.id) && group.patterns.some(function(pattern) { return names.some(function(name) { return globMatch(pattern, name); }); }); });
+    const candidates = explicit.sort(before).concat(named.sort(before));
+    if (!candidates.length) return;
+    node.group = candidates[0].id;
+    if (candidates.length > 1)
+    {
+      const chosen = candidates[0];
+      diagnostics.push({ level: 'info', code: 'supplement-group-overlap', nodeId: node.id, message: I18n.token('msg.diagnostic.groupOverlap', { name: limitText(node.name, 160), groups: limitText(candidates.map(function(group) { return group.name; }).join(', '), 240), chosen: limitText(chosen.name, 160) }), source: sourceMetadata({ kind: 'supplement', path: chosen.origin, detail: node.id }) });
+    }
+  });
+  const children = new Map();
+  edges.filter(function(edge) { return edge.type === 'spawn'; }).forEach(function(edge)
+  {
+    if (!children.has(edge.from)) children.set(edge.from, []);
+    children.get(edge.from).push(edge.to);
+  });
+  const nodeById = new Map(nodes.map(function(node) { return [node.id, node]; }));
+  const queue = nodes.filter(function(node) { return node.group !== undefined; }).sort(function(first, second)
+  {
+    return before(byId.get(first.group), byId.get(second.group)) || (first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
+  });
+  for (var index = 0; index < queue.length; index++)
+  {
+    (children.get(queue[index].id) || []).forEach(function(id)
+    {
+      const child = nodeById.get(id);
+      if (child && child.group === undefined) { child.group = queue[index].group; queue.push(child); }
+    });
+  }
+  return groups.map(function(group)
+  {
+    const record = { id: group.id, name: group.name, rank: group.rank };
+    if (group.description) record.description = group.description;
+    return record;
+  });
+}
+
+// The sessions the supplement files ask to leave out of the graph (`exclude`). Several files add up: archived is on when any file
+// turns it on, and the patterns and the unlisted project scopes of all files are used. Returns null when no file excludes anything.
+function collectExclude(supplements)
+{
+  const rule = { archived: false, patterns: [], unlisted: [], origin: '' };
+  supplements.forEach(function(item)
+  {
+    const raw = item.document.exclude;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const patterns = (Array.isArray(raw.match) ? raw.match : []).map(function(pattern) { return String(pattern).toLowerCase(); });
+    // `unlisted` only counts with a project scope; without one it would reach every project the viewer shows.
+    const scope = raw.unlisted === true && typeof raw.project === 'string' && raw.project.trim() ? raw.project.trim().toLowerCase() : '';
+    if (raw.archived !== true && !patterns.length && !scope) return;
+    if (!rule.origin) rule.origin = item.path;
+    if (raw.archived === true) rule.archived = true;
+    rule.patterns = rule.patterns.concat(patterns);
+    if (scope) rule.unlisted.push(scope);
+  });
+  return rule.origin ? rule : null;
+}
+
+// The nodes reachable from `start` through `children` (a Map of id to a Set of ids), visiting only ids that `allowed` accepts.
+// The start nodes themselves count as reached only when `includeStart` is set.
+function reachable(start, children, allowed, includeStart)
+{
+  const reached = new Set(includeStart ? start : []);
+  const queue = start.slice();
+  for (var index = 0; index < queue.length; index++)
+  {
+    (children.has(queue[index]) ? Array.from(children.get(queue[index])) : []).forEach(function(id)
+    {
+      if (reached.has(id) || !allowed(id)) return;
+      reached.add(id);
+      queue.push(id);
+    });
+  }
+  return reached;
+}
+
+// Removes the excluded sessions before any relation is resolved, so no edge, conflict, count, group or floor can mention them.
+// A session is excluded when the supplement marks it archived (rule.archived) or when its current name fits a pattern. Aliases are
+// not matched: an alias is an older or another name, and a revived session can still carry a retired "-gNN" one. The archived mark
+// counts even when the observed name differs from the file's (the display rule that ignores it for a renamed session does not
+// apply: a retired session the map labels "x (g07)" while its title stays "x" must not stay on the screen). A session that a
+// supplement lists with an up-to-date name and without archived is that file's own statement about it, so it wins over a name
+// pattern (the same precedence as a listed group member). The sub-agents an excluded session spawned go with it, unless a
+// session that stays spawned them too. With `unlisted` (limited to the projects it names) an observed session that no supplement
+// file lists in `sessions` is excluded as well, unless a kept, listed session spawned it (directly or through other spawned
+// sessions): the only thing that spares an unlisted session is being the child of a listed one, never its name or a group
+// pattern. Returns the relations that remain; leaves one info diagnostic with the counts and the names.
+function excludeSessions(rule, nodeDic, aliasDic, allEdges, listed, marked, declared, lookup, diagnostics)
+{
+  const reasons = new Map();
+  nodeDic.forEach(function(node, id)
+  {
+    if (rule.archived && marked.has(id)) { reasons.set(id, 'archived'); return; }
+    if (!rule.patterns.length || listed.has(id) && !marked.has(id)) return;
+    const name = String(node.name).toLowerCase();
+    if (rule.patterns.some(function(pattern) { return globMatch(pattern, name); })) reasons.set(id, 'match');
+  });
+  const ends = allEdges.map(function(raw) { return [lookup(raw.from), lookup(raw.to)]; });
+  const children = new Map();
+  const parents = new Map();
+  allEdges.forEach(function(raw, index)
+  {
+    const from = ends[index][0];
+    const to = ends[index][1];
+    if (raw.type !== 'spawn' || !from || !to || from === to) return;
+    if (!children.has(from)) children.set(from, new Set());
+    children.get(from).add(to);
+    if (!parents.has(to)) parents.set(to, new Set());
+    parents.get(to).add(from);
+  });
+  if (rule.unlisted.length)
+  {
+    const claimed = reachable(Array.from(nodeDic.keys()).filter(function(id) { return declared.has(id) && !reasons.has(id); }), children, function(id) { return !reasons.has(id); }, true);
+    nodeDic.forEach(function(node, id)
+    {
+      if (reasons.has(id) || claimed.has(id)) return;
+      const project = String(node.project || (node.cwd ? Path.basename(node.cwd) : '')).toLowerCase();
+      if (rule.unlisted.some(function(scope) { return globMatch(scope, project); })) reasons.set(id, 'unlisted');
+    });
+  }
+  if (!reasons.size) return allEdges;
+  // Everything below an excluded session ("below"), then the part of it that a session which stays also reaches: a node survives when
+  // a spawn parent outside the excluded sessions and their descendants spawned it (or a supplement lists it), and so does everything
+  // that survivor spawned.
+  const below = reachable(Array.from(reasons.keys()), children, function(id) { return !reasons.has(id); });
+  const survivors = reachable(Array.from(below).filter(function(id)
+  {
+    return declared.has(id) || Array.from(parents.get(id)).some(function(parent) { return !reasons.has(parent) && !below.has(parent); });
+  }), children, function(id) { return below.has(id); }, true);
+  const removed = new Set(reasons.keys());
+  below.forEach(function(id) { if (!survivors.has(id)) removed.add(id); });
+  // An unlisted node that a removed session spawned counts as one of that session's sub-agents, not as a session of its own.
+  const direct = Array.from(reasons.keys()).filter(function(id)
+  {
+    return reasons.get(id) !== 'unlisted' || !parents.has(id) || !Array.from(parents.get(id)).some(function(parent) { return removed.has(parent); });
+  });
+  const spawned = removed.size - direct.length;
+  const shown = direct.slice(0, EXCLUDED_LIST_LIMIT).map(function(id) { return { id: safeText(id, 2000), name: safeText(nodeDic.get(id).name, 300), reason: reasons.get(id) }; });
+  const count = function(reason) { return direct.filter(function(id) { return reasons.get(id) === reason; }).length; };
+  const archived = count('archived');
+  const unlisted = count('unlisted');
+  removed.forEach(function(id) { nodeDic.delete(id); });
+  aliasDic.forEach(function(ids, name)
+  {
+    ids.forEach(function(id) { if (removed.has(id)) ids.delete(id); });
+    if (!ids.size) aliasDic.delete(name);
+  });
+  for (var position = diagnostics.length - 1; position >= 0; position--)
+  {
+    const item = diagnostics[position];
+    if (item.code === 'supplement-name-stale' && item.source && removed.has(item.source.detail)) diagnostics.splice(position, 1);
+  }
+  const counts = { count: direct.length, archived: archived, matched: direct.length - archived - unlisted, spawned: spawned };
+  // The wording only grows the "listed in no supplement file" part when `unlisted` is on, so the other settings keep their text.
+  if (rule.unlisted.length) counts.unlisted = unlisted;
+  diagnostics.push({ level: 'info', code: 'supplement-exclude', message: I18n.token(rule.unlisted.length ? 'msg.diagnostic.sessionsExcludedUnlisted' : 'msg.diagnostic.sessionsExcluded', counts), excluded: shown, source: sourceMetadata({ kind: 'supplement', path: rule.origin, detail: '' }) });
+  return allEdges.filter(function(raw, position) { return !removed.has(ends[position][0]) && !removed.has(ends[position][1]); });
+}
+
 function buildGraph(snapshots, supplements, version)
 {
   const nodeDic = new Map();
@@ -132,7 +352,13 @@ function buildGraph(snapshots, supplements, version)
   const explicitAliases = new Set();
   const fallbackNames = new Set();
   const diagnostics = [];
-  const allEdges = [];
+  var allEdges = [];
+  // Sessions a supplement lists with an up-to-date name (a name pattern of `exclude` never hides them), and the ones it marks
+  // archived whatever the observed name is (the last file that says so wins, like node.archived).
+  const listed = new Set();
+  const marked = new Set();
+  // Every session some supplement file lists in `sessions`, whatever its name or archived state is.
+  const declared = new Set();
   const sourceStatus = [];
   var loading = false;
   function alias(name, id)
@@ -189,6 +415,9 @@ function buildGraph(snapshots, supplements, version)
       diagnostics.push({ level: 'info', code: 'supplement-name-stale', message: I18n.token('msg.diagnostic.supplementNameStale', { supplementName: limitText(supplementName, 160), observedName: limitText(node.name, 160) }), source: sourceMetadata({ kind: 'supplement', path: origin, detail: id }) });
     }
     if (isSupplement && typeof raw.archived === 'boolean' && !staleName) node.archived = raw.archived;
+    if (isSupplement && !staleName) listed.add(id);
+    if (isSupplement) declared.add(id);
+    if (isSupplement && typeof raw.archived === 'boolean') marked[raw.archived ? 'add' : 'delete'](id);
     (raw.sources || []).forEach(function(source) { addSource(node, source); });
     if (!isSupplement && raw.kind !== 'unresolved' && !id.startsWith('unresolved:')) node.observed = true;
     if (!node.observed) node.kind = 'unresolved';
@@ -228,17 +457,27 @@ function buildGraph(snapshots, supplements, version)
       allEdges.push(Object.assign({}, raw, { id: 'supplement:' + item.path + ':' + raw.id, source: { kind: 'supplement', path: item.path, detail: safeText(raw.description, 500) || safeText(raw.evidence && raw.evidence.detail, 500) || I18n.token('msg.source.supplementRelation') }, evidence: evidence }));
     });
   });
+  const exclusion = collectExclude(supplements);
+  if (exclusion) allEdges = excludeSessions(exclusion, nodeDic, aliasDic, allEdges, listed, marked, declared, lookup, diagnostics);
   aliasDic.forEach(function(ids, name)
   {
     if (ids.size < 2 || !explicitAliases.has(name)) return;
     ids.forEach(function(id) { addConflict(nodeDic.get(id), 'alias', Array.from(ids), I18n.token('msg.conflict.aliasPointsToSeveral', { name: safeText(name) })); });
   });
-  function resolve(reference)
+  // The session a relation endpoint names: an ID, or an alias that points at exactly one session. Null when there is none.
+  function lookup(reference)
   {
     const ref = safeText(reference, 2000);
     if (nodeDic.has(ref)) return ref;
     const matches = aliasDic.get(ref);
-    if (matches && matches.size === 1) return Array.from(matches)[0];
+    return matches && matches.size === 1 ? Array.from(matches)[0] : null;
+  }
+  function resolve(reference)
+  {
+    const known = lookup(reference);
+    if (known) return known;
+    const ref = safeText(reference, 2000);
+    const matches = aliasDic.get(ref);
     const id = matches ? 'unresolved:alias:' + ref : ref || 'unresolved:empty';
     if (!nodeDic.has(id))
     {
@@ -300,6 +539,7 @@ function buildGraph(snapshots, supplements, version)
       if (!child.project) { child.project = node.project; queue.push(child); }
     });
   }
+  const groups = assignGroups(nodes, edges, supplements, diagnostics);
   const stats = { nodes: nodes.length, edges: edges.length, loading: loading, unresolvedNodes: nodes.filter(function(node) { return !node.observed; }).length, conflictNodes: nodes.filter(function(node) { return node.conflicts.length > 0; }).length, conflictEdges: edges.filter(function(edge) { return edge.conflicts.length > 0; }).length, providers: {}, relations: {}, activity: { recent: 0, inactive: 0, unconfirmed: 0 } };
   nodes.forEach(function(node)
   {
@@ -308,7 +548,10 @@ function buildGraph(snapshots, supplements, version)
     stats.activity[node.activity.category]++;
   });
   edges.forEach(function(edge) { stats.relations[edge.type] = (stats.relations[edge.type] || 0) + 1; });
-  return { version: version, generatedAt: new Date().toISOString(), nodes: nodes, edges: edges, diagnostics: diagnostics, stats: stats, sourceStatus: sourceStatus };
+  const graph = { version: version, generatedAt: new Date().toISOString(), nodes: nodes, edges: edges, diagnostics: diagnostics, stats: stats, sourceStatus: sourceStatus };
+  // Only a supplement that lists groups adds this key, so a graph without groups looks exactly as before.
+  if (groups.length) graph.groups = groups;
+  return graph;
 }
 
 function classifyActivity(node, now)

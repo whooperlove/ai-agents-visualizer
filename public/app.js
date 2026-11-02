@@ -1772,7 +1772,7 @@ function wasUpdateOffice()
     nodes = nodes.filter(function (node) { return branch.has(node.id); });
     edges = edges.filter(function (edge) { return branch.has(edge.from) && branch.has(edge.to); });
   }
-  wasState.officeData = WasOfficeModel.buildOffice({ nodes: nodes, edges: edges }, Object.assign({}, filters, {
+  wasState.officeData = WasOfficeModel.buildOffice({ nodes: nodes, edges: edges, groups: wasState.snapshot && wasState.snapshot.groups }, Object.assign({}, filters, {
     groupFloors: wasElements.officeGrouped.checked,
     order: wasElements.officeOrder.value,
     showQuiet: wasElements.officeQuiet.checked,

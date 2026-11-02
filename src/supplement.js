@@ -7,6 +7,8 @@ const RELATION_TYPES = ['spawn', 'management', 'dependency', 'collaboration', 'h
 const CONFIDENCES = ['confirmed', 'inferred', 'unresolved'];
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 const FIELD_NAME_LIMIT = 80;
+const GROUP_NAME_LIMIT = 120;
+const PATTERN_LIMIT = 200;
 
 // Field names come from the user's JSON: show them as plain text, so they can neither forge a message token nor grow without bound.
 function plain(text)
@@ -41,7 +43,7 @@ function validateSupplement(document)
   const errors = [];
   if (!object(document)) return [I18n.token('msg.supplement.rootObject')];
   const documentLabel = I18n.token('msg.supplement.locationDocument');
-  checkKeys(document, ['schemaVersion', 'description', 'sessions', 'relations'], documentLabel, errors);
+  checkKeys(document, ['schemaVersion', 'description', 'sessions', 'relations', 'groups', 'exclude'], documentLabel, errors);
   if (document.schemaVersion !== 1) errors.push(I18n.token('msg.supplement.schemaVersion'));
   checkText(document, 'description', documentLabel, errors, false);
   ['sessions', 'relations'].forEach(function(key)
@@ -84,7 +86,47 @@ function validateSupplement(document)
       }
     }
   });
+  validateGroups(document.groups, errors);
+  validateExclude(document.exclude, errors);
   return errors;
+}
+
+// Logical groups are optional. A group needs an id, a name and a rank (an integer; a smaller rank is a more important group and
+// takes the lower floors); its sessions come from listed member IDs, from name patterns, or from both.
+function validateGroups(groups, errors)
+{
+  if (groups === undefined) return;
+  if (!Array.isArray(groups)) return errors.push(I18n.token('msg.supplement.arrayRequired', { path: 'groups' }));
+  const seen = new Set();
+  groups.forEach(function(group, index)
+  {
+    const location = 'groups[' + index + ']';
+    if (!object(group)) return errors.push(I18n.token('msg.supplement.objectRequired', { path: location }));
+    checkKeys(group, ['id', 'name', 'rank', 'description', 'members', 'match'], location, errors);
+    ['id', 'description'].forEach(function(key) { checkText(group, key, location, errors, key === 'id'); });
+    if (typeof group.name !== 'string' || !group.name.trim() || group.name.length > GROUP_NAME_LIMIT) errors.push(I18n.token('msg.supplement.groupNameLength', { path: location + '.name' }));
+    if (!Number.isSafeInteger(group.rank)) errors.push(I18n.token('msg.supplement.integerRequired', { path: location + '.rank' }));
+    if (seen.has(group.id)) errors.push(I18n.token('msg.supplement.duplicateGroup', { path: location + '.id' }));
+    seen.add(group.id);
+    if (group.members !== undefined && (!Array.isArray(group.members) || group.members.some(function(member) { return typeof member !== 'string' || !/^(claude|codex):[^\s]+$/.test(member) || member.length > 2000; }))) errors.push(I18n.token('msg.supplement.membersArray', { path: location + '.members' }));
+    if (group.match !== undefined && (!Array.isArray(group.match) || group.match.some(function(pattern) { return typeof pattern !== 'string' || !pattern.trim() || pattern.length > PATTERN_LIMIT; }))) errors.push(I18n.token('msg.supplement.matchArray', { path: location + '.match' }));
+  });
+}
+
+// `exclude` is optional. It leaves sessions out of the graph altogether: `archived: true` drops the sessions this file marks archived,
+// `match` drops the sessions whose current name fits one of the patterns (same pattern syntax as a group's `match`), and
+// `unlisted` (with `project`) drops the observed sessions of those projects that no supplement file lists and that no listed session spawned.
+function validateExclude(exclude, errors)
+{
+  if (exclude === undefined) return;
+  if (!object(exclude)) return errors.push(I18n.token('msg.supplement.objectRequired', { path: 'exclude' }));
+  checkKeys(exclude, ['archived', 'match', 'unlisted', 'project'], 'exclude', errors);
+  if (exclude.archived !== undefined && typeof exclude.archived !== 'boolean') errors.push(I18n.token('msg.supplement.booleanRequired', { path: 'exclude.archived' }));
+  if (exclude.unlisted !== undefined && typeof exclude.unlisted !== 'boolean') errors.push(I18n.token('msg.supplement.booleanRequired', { path: 'exclude.unlisted' }));
+  checkText(exclude, 'project', 'exclude', errors, false);
+  // `unlisted` reaches every observed session that no file lists, so it must say which projects it looks at (a pattern; * = all).
+  if (exclude.unlisted === true && exclude.project === undefined) errors.push(I18n.token('msg.supplement.unlistedNeedsProject', { path: 'exclude.project' }));
+  if (exclude.match !== undefined && (!Array.isArray(exclude.match) || exclude.match.some(function(pattern) { return typeof pattern !== 'string' || !pattern.trim() || pattern.length > PATTERN_LIMIT; }))) errors.push(I18n.token('msg.supplement.matchArray', { path: 'exclude.match' }));
 }
 
 function loadSupplement(path, callback)

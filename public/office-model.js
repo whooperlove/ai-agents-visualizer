@@ -7,9 +7,14 @@ function wasOfficeText(value)
 }
 
 /* A message token in the form WasI18n.token builds, so the viewer renders the floor name in its own language (WasI18n.resolve). */
-function wasOfficeMessage(key)
+function wasOfficeMessage(key, params)
 {
-  return "\u27e6" + key + "\u27e7";
+  var query = [];
+  Object.keys(params || {}).forEach(function (name)
+  {
+    query.push(encodeURIComponent(name) + "=" + encodeURIComponent(String(params[name])));
+  });
+  return "\u27e6" + key + (query.length ? "?" + query.join("&") : "") + "\u27e7";
 }
 
 /* Names that come from observed records must not be able to forge a message token. */
@@ -277,6 +282,45 @@ function wasOfficeAddLink(adjacency, from, to)
   adjacency.get(from).push(to);
 }
 
+/* The management and spawn links of a set of edges, in the shapes the floor layout reads them. */
+function wasOfficeLinks(edges)
+{
+  var links = { management: edges.filter(function (edge) { return edge.type === "management"; }), managers: new Set(), managedParents: new Map(), nativeParents: new Map(), nativeChildren: new Map() };
+  links.management.forEach(function (edge)
+  {
+    links.managers.add(edge.from);
+    wasOfficeAddLink(links.managedParents, edge.to, edge.from);
+  });
+  edges.forEach(function (edge)
+  {
+    if (edge.type === "spawn")
+    {
+      wasOfficeAddLink(links.nativeChildren, edge.from, edge.to);
+      wasOfficeAddLink(links.nativeParents, edge.to, edge.from);
+    }
+  });
+  return links;
+}
+
+/* The logical groups of the supplement, in floor order: a smaller rank is a more important group and takes the lower floors, and
+   groups of equal rank keep the order the supplement lists them in. A group that is listed twice counts once. */
+function wasOfficeGroups(raw)
+{
+  var seen = new Set();
+  var groups = [];
+  (Array.isArray(raw) ? raw : []).forEach(function (group, index)
+  {
+    var id = group ? wasOfficeText(group.id) : "";
+    if (!id || seen.has(id))
+    {
+      return;
+    }
+    seen.add(id);
+    groups.push({ id: id, name: wasOfficeFloorName(group.name) || wasOfficeFloorName(id), rank: Number.isFinite(group.rank) ? group.rank : 0, index: index });
+  });
+  return groups.sort(function (first, second) { return first.rank - second.rank || first.index - second.index; });
+}
+
 /* Iterative strongly connected components keep native cycles finite at any depth. */
 function wasOfficeNativeRoots(ids, children, parents)
 {
@@ -452,62 +496,82 @@ function wasOfficeBuildOffice(snapshot, options)
   {
     return wasOfficeCompare(first.from, second.from) || wasOfficeCompare(first.to, second.to) || wasOfficeCompare(first.type, second.type);
   });
-  var management = edges.filter(function (edge) { return edge.type === "management"; });
-  var managers = new Set();
-  var managedParents = new Map();
-  var nativeParents = new Map();
-  var nativeChildren = new Map();
-  management.forEach(function (edge)
+  var links = wasOfficeLinks(edges);
+  var management = links.management;
+  var managedParents = links.managedParents;
+  var nativeParents = links.nativeParents;
+  var nativeChildren = links.nativeChildren;
+  /* Logical groups from the supplement take the floors first. Every group lays out its own sessions with the management and
+     spawn links among themselves, so a group may span several floors; the sessions of no group follow above them. */
+  var groups = wasOfficeGroups(snapshot.groups);
+  var groupById = new Map(groups.map(function (group) { return [group.id, group]; }));
+  var groupOf = new Map();
+  ids.forEach(function (id)
   {
-    managers.add(edge.from);
-    wasOfficeAddLink(managedParents, edge.to, edge.from);
-  });
-  edges.forEach(function (edge)
-  {
-    if (edge.type === "spawn")
+    var group = groupById.get(wasOfficeText(nodes.get(id).group));
+    if (group)
     {
-      wasOfficeAddLink(nativeChildren, edge.from, edge.to);
-      wasOfficeAddLink(nativeParents, edge.to, edge.from);
+      groupOf.set(id, group);
     }
   });
+  var partitions = groups.map(function (group)
+  {
+    return { group: group, ids: ids.filter(function (id) { return groupOf.get(id) === group; }) };
+  }).concat([{ group: null, ids: ids.filter(function (id) { return !groupOf.has(id); }) }]).filter(function (partition) { return partition.ids.length > 0; });
   var homeFloor = new Map();
   var floorById = new Map();
+  var floorKind = new Map();
+  var floorTeam = new Map();
+  var floorPartition = new Map();
   var floors = [];
-  function addFloor(id, name, managerId)
+  function addFloor(partition, id, team, managerId, kind)
   {
     if (!floorById.has(id))
     {
-      var floor = { id: id, name: name, managerId: managerId, nodeIds: [], hiddenCount: 0 };
+      var floor = { id: id, name: team === null ? wasOfficeMessage("scene.floor.independent") : team, managerId: managerId, nodeIds: [], hiddenCount: 0 };
+      if (partition.group)
+      {
+        floor.groupId = partition.group.id;
+      }
       floors.push(floor);
       floorById.set(id, floor);
+      floorKind.set(id, kind);
+      floorTeam.set(id, team);
+      floorPartition.set(id, partition);
     }
     return id;
   }
-  wasOfficeManagerOrder(managers, management).forEach(function (id)
+  partitions.forEach(function (partition)
   {
-    homeFloor.set(id, addFloor(prefix + "manager:" + encodeURIComponent(id), wasOfficeFloorName(nodes.get(id).name) || wasOfficeFloorName(id), id));
-  });
-  ids.forEach(function (id)
-  {
-    if (!homeFloor.has(id) && managedParents.has(id))
+    var members = new Set(partition.ids);
+    var local = wasOfficeLinks(edges.filter(function (edge) { return members.has(edge.from) && members.has(edge.to); }));
+    partition.scope = partition.group ? prefix + "group:" + encodeURIComponent(partition.group.id) + ":" : prefix;
+    wasOfficeManagerOrder(local.managers, local.management).forEach(function (id)
     {
-      homeFloor.set(id, homeFloor.get(managedParents.get(id)[0]));
-    }
+      homeFloor.set(id, addFloor(partition, partition.scope + "manager:" + encodeURIComponent(id), wasOfficeFloorName(nodes.get(id).name) || wasOfficeFloorName(id), id, "manager"));
+    });
+    partition.ids.forEach(function (id)
+    {
+      if (!homeFloor.has(id) && local.managedParents.has(id))
+      {
+        homeFloor.set(id, homeFloor.get(local.managedParents.get(id)[0]));
+      }
+    });
+    wasOfficePropagate(Array.from(homeFloor.keys()).filter(function (id) { return members.has(id); }).map(function (id)
+    {
+      return { id: id, anchor: id, floorId: homeFloor.get(id), distance: 0 };
+    }), local.nativeChildren, homeFloor);
+    var remaining = partition.ids.filter(function (id) { return !homeFloor.has(id); });
+    var roots = wasOfficeNativeRoots(remaining, local.nativeChildren, local.nativeParents);
+    var seeds = roots.map(function (id)
+    {
+      var hasNativeRelation = (local.nativeChildren.get(id) || []).length || (local.nativeParents.get(id) || []).length;
+      var floorId = hasNativeRelation ? addFloor(partition, partition.scope + "native:" + encodeURIComponent(id), wasOfficeFloorName(nodes.get(id).name) || wasOfficeFloorName(id), null, "native") : addFloor(partition, partition.scope + "independent", null, null, "independent");
+      homeFloor.set(id, floorId);
+      return { id: id, anchor: id, floorId: floorId, distance: 0 };
+    });
+    wasOfficePropagate(seeds, local.nativeChildren, homeFloor);
   });
-  wasOfficePropagate(Array.from(homeFloor.keys()).map(function (id)
-  {
-    return { id: id, anchor: id, floorId: homeFloor.get(id), distance: 0 };
-  }), nativeChildren, homeFloor);
-  var remaining = ids.filter(function (id) { return !homeFloor.has(id); });
-  var roots = wasOfficeNativeRoots(remaining, nativeChildren, nativeParents);
-  var seeds = roots.map(function (id)
-  {
-    var hasNativeRelation = (nativeChildren.get(id) || []).length || (nativeParents.get(id) || []).length;
-    var floorId = hasNativeRelation ? addFloor(prefix + "native:" + encodeURIComponent(id), wasOfficeFloorName(nodes.get(id).name) || wasOfficeFloorName(id), null) : addFloor(prefix + "independent", wasOfficeMessage("scene.floor.independent"), null);
-    homeFloor.set(id, floorId);
-    return { id: id, anchor: id, floorId: floorId, distance: 0 };
-  });
-  wasOfficePropagate(seeds, nativeChildren, homeFloor);
   var activityMode = options.activity || "recent";
   var now = Number.isFinite(options.now) ? options.now : Date.now();
   var activities = new Map();
@@ -559,10 +623,9 @@ function wasOfficeBuildOffice(snapshot, options)
     });
   }
   /* A tree of spawned sessions earns a floor of its own only while at least two of its sessions are on show; a lone one
-     belongs with the other independent sessions. Floors then run teams first, trees next and the independent floor last,
+     belongs with the other independent sessions of its group. Floors then run group by group, from the most important group
+     up. Inside a group, and among the sessions of no group, teams come first, trees next and the independent floor last,
      whatever the order of the session ids was. */
-  var treePrefix = prefix + "native:";
-  var independentId = prefix + "independent";
   var visibleInFloor = new Map();
   ids.forEach(function (id)
   {
@@ -571,15 +634,20 @@ function wasOfficeBuildOffice(snapshot, options)
       visibleInFloor.set(homeFloor.get(id), (visibleInFloor.get(homeFloor.get(id)) || 0) + 1);
     }
   });
-  var loneTrees = new Set(floors.filter(function (floor) { return floor.id.indexOf(treePrefix) === 0 && (visibleInFloor.get(floor.id) || 0) < 2; }).map(function (floor) { return floor.id; }));
+  var loneTrees = new Set(floors.filter(function (floor) { return floorKind.get(floor.id) === "native" && (visibleInFloor.get(floor.id) || 0) < 2; }).map(function (floor) { return floor.id; }));
   if (loneTrees.size)
   {
-    addFloor(independentId, wasOfficeMessage("scene.floor.independent"), null);
+    var moved = new Map();
+    loneTrees.forEach(function (floorId)
+    {
+      var partition = floorPartition.get(floorId);
+      moved.set(floorId, addFloor(partition, partition.scope + "independent", null, null, "independent"));
+    });
     ids.forEach(function (id)
     {
-      if (loneTrees.has(homeFloor.get(id)))
+      if (moved.has(homeFloor.get(id)))
       {
-        homeFloor.set(id, independentId);
+        homeFloor.set(id, moved.get(homeFloor.get(id)));
       }
     });
     floors = floors.filter(function (floor) { return !loneTrees.has(floor.id); });
@@ -587,12 +655,31 @@ function wasOfficeBuildOffice(snapshot, options)
   }
   function floorRank(floor)
   {
-    return floor.id === independentId ? 2 : floor.id.indexOf(treePrefix) === 0 ? 1 : 0;
+    return floorKind.get(floor.id) === "independent" ? 2 : floorKind.get(floor.id) === "native" ? 1 : 0;
   }
   floors = floors.map(function (floor, index) { return { floor: floor, index: index }; }).sort(function (first, second)
   {
-    return floorRank(first.floor) - floorRank(second.floor) || first.index - second.index;
+    return partitions.indexOf(floorPartition.get(first.floor.id)) - partitions.indexOf(floorPartition.get(second.floor.id)) || floorRank(first.floor) - floorRank(second.floor) || first.index - second.index;
   }).map(function (entry) { return entry.floor; });
+  /* A floor of a group carries the group's name, then the team or tree it holds. A group whose only floor is the independent one
+     is named by the group alone. */
+  var floorsOfGroup = new Map();
+  floors.forEach(function (floor)
+  {
+    if (floor.groupId !== undefined)
+    {
+      floorsOfGroup.set(floor.groupId, (floorsOfGroup.get(floor.groupId) || 0) + 1);
+    }
+  });
+  floors.forEach(function (floor)
+  {
+    if (floor.groupId !== undefined)
+    {
+      var groupName = groupById.get(floor.groupId).name;
+      var team = floorTeam.get(floor.id);
+      floor.name = team === null && floorsOfGroup.get(floor.groupId) === 1 ? groupName : wasOfficeMessage("scene.floor.grouped", { group: groupName, team: team === null ? wasOfficeMessage("scene.floor.independent") : team });
+    }
+  });
   var actors = [];
   var actorById = new Map();
   ids.forEach(function (id)
@@ -630,7 +717,7 @@ function wasOfficeBuildOffice(snapshot, options)
   {
     var home = homeFloor.get(actor.id);
     var inFloor = (nativeParents.get(actor.id) || []).filter(function (parentId) { return included.has(parentId) && homeFloor.get(parentId) === home; });
-    if (home.indexOf(treePrefix) === 0 && !inFloor.length)
+    if (floorKind.get(home) === "native" && !inFloor.length)
     {
       depth.set(actor.id, 0);
       queue.push(actor.id);
@@ -682,7 +769,7 @@ function wasOfficeBuildOffice(snapshot, options)
       /* Sessions that talk a lot sit side by side, within one floor. The stage seats working sessions at their desks and resting
          ones on the sofas further right, so each of the two groups is arranged on its own; the head of a group stays with the
          manager or tree root. */
-      var anchor = floor.managerId !== null || floor.id.indexOf(treePrefix) === 0 ? floor.nodeIds[0] : null;
+      var anchor = floor.managerId !== null || floorKind.get(floor.id) === "native" ? floor.nodeIds[0] : null;
       var working = floor.nodeIds.filter(function (id) { return !wasOfficeIsResting(actorById.get(id)); });
       var resting = floor.nodeIds.filter(function (id) { return wasOfficeIsResting(actorById.get(id)); });
       floor.nodeIds = wasOfficeGroupSeats(working, volumes.pairs, working[0] === anchor).concat(wasOfficeGroupSeats(resting, volumes.pairs, resting[0] === anchor));

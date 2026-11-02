@@ -9,7 +9,9 @@
     "schemaVersion": { "const": 1 },
     "description": { "$ref": "#/$defs/text" },
     "sessions": { "type": "array", "items": { "$ref": "#/$defs/session" } },
-    "relations": { "type": "array", "items": { "$ref": "#/$defs/relation" } }
+    "relations": { "type": "array", "items": { "$ref": "#/$defs/relation" } },
+    "groups": { "type": "array", "items": { "$ref": "#/$defs/group" }, "description": "Optional logical groups. Each group takes its own floors; the groups run from the lowest floor up in rank order." },
+    "exclude": { "$ref": "#/$defs/exclude" }
   },
   "$defs": {
     "text": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
@@ -24,6 +26,29 @@
         "archived": { "type": "boolean", "description": "A session that is retired or explicitly archived. It does not change the run status." },
         "description": { "$ref": "#/$defs/text" }
       }
+    },
+    "group": {
+      "type": "object", "additionalProperties": false, "required": ["id", "name", "rank"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "\\S", "description": "Shown on the floor badge in front of the team name." },
+        "rank": { "type": "integer", "description": "A smaller rank is a more important group and takes the lower floors (1F first). Groups of equal rank keep the order they are listed in. Sessions of no group sit above all groups." },
+        "description": { "$ref": "#/$defs/text" },
+        "members": { "type": "array", "items": { "type": "string", "maxLength": 2000, "pattern": "^(claude|codex):[^\\s]+$" }, "description": "Session IDs that belong to the group. A listed member wins over a name pattern." },
+        "match": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" }, "description": "Session name patterns (* any run of characters, ? one character, case ignored), matched against the session name and its aliases, so a new session joins the group by name." }
+      }
+    },
+    "exclude": {
+      "type": "object", "additionalProperties": false,
+      "description": "Optional. Sessions left out of the viewer altogether (the server never sends them): not in the sessions, floors, counts or relations, whatever the activity filter says, and the sub-agents they spawned go with them. Without it nothing is left out.",
+      "properties": {
+        "archived": { "type": "boolean", "description": "true leaves out the sessions marked `archived: true` in this file, also when their observed name differs from the name in the file." },
+        "match": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" }, "description": "Session name patterns (* any run of characters, ? one character, case ignored), matched against the session's current name only, not its aliases. A session that a supplement lists without `archived: true` is never left out by a pattern." },
+        "unlisted": { "type": "boolean", "description": "true also leaves out every observed session of the projects named by `project` that no supplement file lists in `sessions`, unless a listed session spawned it (a sub-agent of a listed session stays). Its name or a group pattern never spares it." },
+        "project": { "$ref": "#/$defs/text", "description": "Project pattern (* any run of characters, ? one character, case ignored; * for every project) that `unlisted` is limited to. Compared with the session's project: the supplement's `project`, else the folder name of its working directory." }
+      },
+      "if": { "properties": { "unlisted": { "const": true } }, "required": ["unlisted"] },
+      "then": { "required": ["project"] }
     },
     "relation": {
       "type": "object", "additionalProperties": false,

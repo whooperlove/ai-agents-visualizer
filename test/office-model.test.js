@@ -526,3 +526,140 @@ Test("a crowded floor of talkers is arranged without losing or repeating a sessi
   Assert.equal(new Set(seated).size, 400);
   Assert.deepEqual(seated.slice().sort(), nodes.map(function (entry) { return entry.id; }).sort());
 });
+
+/* Logical groups: a supplement gathers floors into groups, and the more important group (the smaller rank) takes the lower floors. */
+function grouped(nodes, edges, groups, options)
+{
+  return Office.buildOffice({ nodes: nodes, edges: edges, groups: groups }, Object.assign({ project: "fixture", activity: "all" }, options));
+}
+
+function floorIds(office)
+{
+  return office.floors.map(function (floor) { return floor.id; });
+}
+
+function floorNames(office, locale)
+{
+  var I18n = I18nHelpers.loadNodeI18n();
+  return office.floors.map(function (floor) { return I18n.resolve(floor.name, locale || "en"); });
+}
+
+Test("groups run from the lowest floor by rank, and sessions of no group sit above all of them", function ()
+{
+  var nodes = [node("loose"), node("art-1", { group: "art" }), node("core-1", { group: "core" }), node("story-1", { group: "story" })];
+  var groups = [{ id: "story", name: "Story", rank: 20 }, { id: "art", name: "Art", rank: 30 }, { id: "core", name: "Core", rank: 10 }];
+  var office = grouped(nodes, [], groups);
+  Assert.deepEqual(office.floors.map(function (floor) { return floor.nodeIds; }), [["core-1"], ["story-1"], ["art-1"], ["loose"]], "1F is the group with the smallest rank");
+  Assert.deepEqual(office.floors.map(function (floor) { return floor.groupId; }), ["core", "story", "art", undefined]);
+  Assert.match(office.floors[3].id, /:independent$/);
+  Assert.equal(office.floors[3].name, "⟦scene.floor.independent⟧", "the floor of no group keeps its own name");
+});
+
+Test("groups of equal rank keep the order the supplement lists them in", function ()
+{
+  var nodes = [node("a-1", { group: "a" }), node("b-1", { group: "b" }), node("c-1", { group: "c" })];
+  var first = grouped(nodes, [], [{ id: "c", name: "C", rank: 5 }, { id: "a", name: "A", rank: 5 }, { id: "b", name: "B", rank: 5 }]);
+  Assert.deepEqual(first.floors.map(function (floor) { return floor.groupId; }), ["c", "a", "b"]);
+  var reversed = grouped(nodes.slice().reverse(), [], [{ id: "c", name: "C", rank: 5 }, { id: "a", name: "A", rank: 5 }, { id: "b", name: "B", rank: 5 }]);
+  Assert.deepEqual(floorIds(reversed), floorIds(first), "the order of the sessions does not matter");
+});
+
+Test("a group spans several floors: its teams, spawn trees and independent sessions are laid out inside the group only", function ()
+{
+  var nodes = [
+    node("boss", { group: "story" }), node("writer-1", { group: "story" }), node("writer-2", { group: "story" }),
+    node("root", { group: "story" }), node("leaf", { group: "story", kind: "agent" }), node("solo", { group: "story" }),
+    node("master", { group: "core" }), node("outsider")
+  ];
+  var edges = [
+    edge("boss", "writer-1", "management"), edge("boss", "writer-2", "management"), edge("root", "leaf", "spawn"),
+    edge("master", "boss", "management"), edge("master", "outsider", "management"), edge("master", "solo", "management")
+  ];
+  var groups = [{ id: "core", name: "Core", rank: 1 }, { id: "story", name: "Story", rank: 2 }];
+  var office = grouped(nodes, edges, groups);
+  Assert.deepEqual(office.floors.map(function (floor) { return floor.groupId; }), ["core", "story", "story", "story", undefined]);
+  Assert.equal(office.floors[0].managerId, null, "the manager of other groups leads no team of its own group");
+  Assert.deepEqual(office.floors[0].nodeIds, ["master"]);
+  Assert.equal(office.floors[1].managerId, "boss");
+  Assert.deepEqual(office.floors[1].nodeIds, ["boss", "writer-1", "writer-2"]);
+  Assert.match(office.floors[2].id, /:native:/);
+  Assert.deepEqual(office.floors[2].nodeIds, ["root", "leaf"]);
+  Assert.match(office.floors[3].id, /:independent$/);
+  Assert.deepEqual(office.floors[3].nodeIds, ["solo"], "a management link from another group does not pull a session out of its group");
+  Assert.deepEqual(office.floors[4].nodeIds, ["outsider"]);
+  floorIds(office).forEach(function (id, index, all) { Assert.equal(all.indexOf(id), index, "floor ids are unique"); });
+});
+
+Test("a spawn tree that crosses a group border is split at the border", function ()
+{
+  var nodes = [node("root", { group: "a" }), node("child", { group: "b", kind: "agent" })];
+  var office = grouped(nodes, [edge("root", "child", "spawn")], [{ id: "a", name: "A", rank: 1 }, { id: "b", name: "B", rank: 2 }]);
+  Assert.deepEqual(office.floors.map(function (floor) { return floor.nodeIds; }), [["root"], ["child"]]);
+});
+
+Test("a lone session of a spawn tree joins the independent floor of its own group", function ()
+{
+  var nodes = [node("root-1", { group: "g" }), node("child-1", { group: "g", kind: "agent" }), node("root-2", { group: "g" }), node("child-2", { group: "g", kind: "agent", status: "completed", activity: { category: "inactive" } }), node("solo", { group: "g" }), node("loose")];
+  var edges = [edge("root-1", "child-1", "spawn"), edge("root-2", "child-2", "spawn")];
+  var office = grouped(nodes, edges, [{ id: "g", name: "G", rank: 1 }], { activity: "recent", showQuiet: false });
+  Assert.equal(office.floors.length, 3);
+  Assert.deepEqual(office.floors.map(function (floor) { return floor.groupId; }), ["g", "g", undefined]);
+  Assert.match(office.floors[0].id, /:native:/);
+  Assert.match(office.floors[1].id, /:independent$/);
+  Assert.equal(office.actorById.get("root-2").floorId, office.actorById.get("solo").floorId);
+  Assert.notEqual(office.actorById.get("root-2").floorId, office.actorById.get("loose").floorId, "it does not leave the group");
+});
+
+Test("floor names carry the group name in front of the team, in each language", function ()
+{
+  var nodes = [node("boss", { group: "story", name: "story-director" }), node("writer", { group: "story" }), node("solo", { group: "story" }), node("master", { group: "core" })];
+  var office = grouped(nodes, [edge("boss", "writer", "management")], [{ id: "core", name: "Core", rank: 1 }, { id: "story", name: "Story · Translation", rank: 2 }]);
+  Assert.deepEqual(floorNames(office, "en"), ["Core", "Story · Translation · story-director", "Story · Translation · Independent sessions"]);
+  Assert.deepEqual(floorNames(office, "ko"), ["Core", "Story · Translation · story-director", "Story · Translation · 독립 세션"]);
+  Assert.equal(office.floors[0].name, "Core", "a group whose only floor is the independent one is named by the group alone");
+});
+
+Test("group and team names cannot forge a message token", function ()
+{
+  var forged = "⟦scene.floor.all⟧";
+  var nodes = [node("boss", { group: "g", name: forged }), node("worker", { group: "g" })];
+  var office = grouped(nodes, [edge("boss", "worker", "management")], [{ id: "g", name: "Team " + forged, rank: 1 }]);
+  var I18n = I18nHelpers.loadNodeI18n();
+  Assert.equal(I18n.resolve(office.floors[0].name, "en"), "Team [scene.floor.all] · [scene.floor.all]");
+});
+
+Test("a session that names a group the supplement does not define stays ungrouped", function ()
+{
+  var nodes = [node("a", { group: "ghost" }), node("b")];
+  var office = grouped(nodes, [], [{ id: "real", name: "Real", rank: 1 }]);
+  Assert.equal(office.floors.length, 1);
+  Assert.equal(office.floors[0].groupId, undefined);
+  Assert.deepEqual(office.floors[0].nodeIds, ["a", "b"]);
+});
+
+Test("without groups the office is exactly what it was", function ()
+{
+  var plain = topology();
+  var base = Office.buildOffice(plain, { project: "fixture", activity: "all" });
+  var empty = Office.buildOffice({ nodes: plain.nodes, edges: plain.edges, groups: [] }, { project: "fixture", activity: "all" });
+  var stray = Office.buildOffice({ nodes: plain.nodes.map(function (entry) { return Object.assign({ group: "unlisted" }, entry); }), edges: plain.edges, groups: [] }, { project: "fixture", activity: "all" });
+  [empty, stray].forEach(function (other)
+  {
+    Assert.deepEqual(other.floors, base.floors);
+    Assert.deepEqual(other.actors, base.actors);
+    Assert.deepEqual(other.stats, base.stats);
+  });
+  Assert.deepEqual(base.floors.map(function (floor) { return { id: floor.id, name: floor.name, managerId: floor.managerId, nodeIds: floor.nodeIds }; }), [
+    { id: "office:fixture:manager:master", name: "ordinary title", managerId: "master", nodeIds: ["master", "coordinator"] },
+    { id: "office:fixture:manager:director", name: "director", managerId: "director", nodeIds: ["director", "native-child", "native-grandchild", "writer-a", "writer-b"] }
+  ], "the layout the code before groups gave for this topology");
+  base.floors.forEach(function (floor) { Assert.equal("groupId" in floor, false); });
+});
+
+Test("the flat view keeps the floors of a group together in group order", function ()
+{
+  var nodes = [node("loose"), node("b-1", { group: "b" }), node("a-1", { group: "a" })];
+  var office = grouped(nodes, [], [{ id: "a", name: "A", rank: 1 }, { id: "b", name: "B", rank: 2 }], { groupFloors: false });
+  Assert.equal(office.floors.length, 1);
+  Assert.deepEqual(office.floors[0].nodeIds, ["a-1", "b-1", "loose"]);
+});

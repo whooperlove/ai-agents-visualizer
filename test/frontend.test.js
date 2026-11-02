@@ -154,6 +154,32 @@ test("the seat order of the character stage reaches the office model, survives a
   assert.deepEqual(Array.from(html.match(/<select id="was-office-order"[\s\S]*?<\/select>/)[0].matchAll(/<option value="(\w+)"/g)).map(function (match) { return match[1]; }), ["group", "name", "status", "volume"]);
 });
 
+test("the logical groups of the snapshot reach the office model, and a snapshot without them passes none", function ()
+{
+  var seen = [];
+  [{ groups: [{ id: "g", name: "G", rank: 1 }] }, {}].forEach(function (snapshot)
+  {
+    var runtime = frontendRuntime();
+    var actors = [node("one", { group: "g" })];
+    var floor = { id: "first", name: "G", nodeIds: ["one"] };
+    var office = { actors: actors, actorById: new Map(actors.map(function (actor) { return [actor.id, actor]; })), floors: [floor], floorById: new Map([[floor.id, floor]]), project: "alpha", stats: { matched: 1, context: 0, hidden: 0 } };
+    runtime.WasOfficeModel = { buildOffice: function (input) { seen.push(input.groups); return office; } };
+    runtime.wasReadFilters = filters;
+    runtime.wasRenderOfficeFloor = function () {};
+    runtime.wasRenderViewScope = function () {};
+    runtime.wasState = {
+      awaited: {}, model: frontend.wasBuildModel({ nodes: actors, edges: [] }), snapshot: snapshot, viewMode: "office", officeFloorId: "first", reducedMotion: { matches: false },
+      officeScene: { setOffice: function () {}, setPartners: function () {}, setMotion: function () {}, setVisible: function () {}, getState: function () { return { floorId: "first" }; } }
+    };
+    runtime.wasElements = {};
+    ["relationFilters", "activity", "officeQuiet", "officeGrouped", "officeOrder", "officeFloor", "empty"].forEach(function (key) { runtime.wasElements[key] = runtimeElement(); });
+    runtime.wasElements.activity.value = "all";
+    runtime.wasElements.relationFilters.querySelectorAll = function () { return []; };
+    runtime.wasUpdateOffice();
+  });
+  assert.deepEqual(seen, [[{ id: "g", name: "G", rank: 1 }], undefined]);
+});
+
 test("connection details preserve every raw record and string or object conflict", function ()
 {
   var runtime = frontendRuntime();

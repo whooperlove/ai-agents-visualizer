@@ -102,7 +102,7 @@ Activity scope and run status are separate pieces of information. An old record 
 | Activity scope | Classified by |
 | --- | --- |
 | Recent activity | Events or verified Claude runtime observations within the last 2 hours. This does not mean the session is running now |
-| Inactive / past | Completed or stopped sub-agents, sessions with no new event for over 2 hours, and entries marked `archived: true` in a supplement JSON |
+| Inactive / past | Completed or stopped sub-agents, sessions with no new event for over 2 hours, and entries marked `archived: true` in a supplement JSON (shown only under the `all` activity filter; [`exclude`](#excluding-sessions) hides them altogether) |
 | Unknown | No last-event time, or a future timestamp that cannot be trusted |
 | All | Everything above |
 
@@ -163,7 +163,7 @@ The **Characters** view is a near-front-facing, side-scrolling stage. In a dusk-
 - **Turning around:** selecting a character turns its chair to the camera and it waves. During a phone animation it also turns the chair to take the call. With reduced motion it turns instantly without a rotation animation.
 - **Smartphone call animation:** when a new message record is observed, the sender is shown calling and the receiver answering. Between two phones on the same screen, signal dots draw an arc; if the other party is off screen or on another floor, the signal leaves through the top of the screen. Characters never walk or change floors to deliver a message. No stage text (calling / ringing / on call) is attached next to a character; a single line under the stage, shown only while a call is playing, says only who is calling whom.
 - **Automatic call replay:** opening the character view replays once, in time order, the latest 12 delivery records from the last 2 hours that the current filters allow. There is no button for it. Call animations are a display based on message records and do not mean a real call or completed work. Past records from the initial scan are not replayed as new messages.
-- **Floors / floor selection:** floors are teams derived from management and spawn evidence: management teams come first, then a spawn tree that has at least two sessions on show, and last one floor of independent sessions, which also takes the lone session of a tree whose other sessions are hidden. Seats keep related sessions together (a team's manager first, a tree's root before its descendants, then one project after the other). Turning off **By floor** merges them into one horizontal stage. A large badge at the top left of the stage always shows the current floor number, team name and location, and **Shift + wheel** moves one floor up or down at a time.
+- **Floors / floor selection:** floors are teams derived from management and spawn evidence: management teams come first, then a spawn tree that has at least two sessions on show, and last one floor of independent sessions, which also takes the lone session of a tree whose other sessions are hidden. A supplement can also define [logical groups](#logical-groups): each group then gets its own floors (the same rules, applied inside the group), the most important group on the lowest floors, and the sessions of no group follow above them. The badge then reads, for example, `2F · Story · story-director`. Seats keep related sessions together (a team's manager first, a tree's root before its descendants, then one project after the other). Turning off **By floor** merges them into one horizontal stage. A large badge at the top left of the stage always shows the current floor number, team name and location, and **Shift + wheel** moves one floor up or down at a time.
 - **Seat order:** the order select in the stage toolbar arranges the seats within each floor. *Grouped by messages* (the default) seats sessions that message each other side by side, the more messages the closer; the manager or tree root stays first, sessions that talk to nobody on the floor keep their place, and only messages between sessions of the same floor count. *Name* sorts A → Z with digits compared as numbers, *Status* puts working sessions first, then waiting, error, interrupted, unknown, idle and completed, and *Most messages first* ranks by messages sent and received; with these three nobody is pinned to the head of the floor. A message is counted once per delivery ID from every recorded message, however old, so seats do not shuffle as records age out of the recent window. When the order changes, characters walk to their new seats; resting sessions stay on the sofas and are ordered among themselves. The choice is remembered in the browser (see [Remembered choices](#remembered-choices)).
 - **Communication cards:** to the right of each character's name tag, the sessions it has exchanged messages with are stacked vertically as yellow sticky-note cards (with a folded corner and a lower shadow so they stand out from the dark name tags). A card shows the full session name (never truncated), a status dot and the time of the last communication, plus the count of unresolved messages when replies are still pending. Agent type and sent / received counts are not shown. New conversations enter at the top; 30 minutes after the last conversation the oldest cards (at the bottom) fade out gradually and disappear. Clicking a card selects that session and the stage moves to it.
 - **Horizontal navigation:** move with the left / right buttons, by dragging or with the wheel, and change the size with the zoom buttons. Double-click the stage or press Home to fit the view (this is also applied automatically when you change floors). The **All sessions on this floor** list at the bottom left of the stage is the only session-selection menu: it highlights the currently selected session, and choosing one closes the list and moves to that session.
@@ -229,7 +229,12 @@ Synthetic hierarchy and conflict example: [`examples/demo.json`](examples/demo.j
   "relations": [
     { "id": "assignment-1", "from": "master", "to": "codex:child-id", "type": "management", "confidence": "confirmed" },
     { "id": "wait-1", "from": "master", "to": "codex:child-id", "type": "dependency", "description": "Waiting for the child's report", "requestId": "req_example", "confidence": "inferred" }
-  ]
+  ],
+  "groups": [
+    { "id": "core", "name": "Coordination", "rank": 10, "members": ["claude:session-id"] },
+    { "id": "workers", "name": "Workers", "rank": 20, "match": ["worker-*"] }
+  ],
+  "exclude": { "archived": true, "match": ["my-project-*-g??"] }
 }
 ```
 
@@ -245,7 +250,54 @@ IDs are `claude:<session ID>` or `codex:<session ID>`. A Claude child is `claude
 
 A relation's `evidence.path` and `evidence.detail` can hold the source document and a line description. The path is for display only; the server never opens that file on its own. `confidence` is `confirmed`, `inferred` or `unresolved`. If a declared counterpart cannot be found in the real records, it is kept as unresolved. A "waiting" example taken from a document is a snapshot with a collection date and does not mean something is waiting now. Source Markdown documents are not re-interpreted automatically, so the supplement JSON has to be updated to reflect newer semantic relations.
 
-Edits to a supplement JSON are applied while the server runs. Invalid JSON or schema keeps the last valid version and shows the error. Relations from a deleted supplement file are removed. Duplicate session or relation IDs and unknown fields are rejected. The file size limit is 16 MiB and there is no node-count limit.
+Edits to a supplement JSON are applied while the server runs. Invalid JSON or schema keeps the last valid version and shows the error. Relations from a deleted supplement file are removed. Duplicate session, relation or group IDs and unknown fields are rejected. The file size limit is 16 MiB and there is no node-count limit.
+
+### Logical groups
+
+The optional top-level `groups` array collects sessions into named groups, so that floors can be stacked by importance instead of only by the teams the records show. Every group lays out its own sessions on its own floors, and a group can span several floors.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique group ID (required) |
+| `name` | Text shown on the floor badge in front of the team name, up to 120 characters (required) |
+| `rank` | Integer (required). **A smaller rank is a more important group and takes the lower floors**, so the group with the smallest rank starts at 1F. Groups of equal rank keep the order they are listed in. Negative ranks are fine |
+| `description` | Free text for people reading the file (optional) |
+| `members` | Session IDs (`claude:…` or `codex:…`) that belong to the group (optional) |
+| `match` | Name patterns (optional): `*` is any run of characters, `?` is one character, anything else is literal and case is ignored. A pattern is tried against the session name and its aliases, so a session that appears later joins the group by name, for example `codex-koppa-i18n-*` |
+
+Rules:
+
+- **Floors inside a group:** the group's sessions are split into teams (`management`), spawn trees and independent sessions with the usual rules, but only the links between sessions of the same group count. A manager whose team sits in other groups, or a spawn tree that crosses a group border, does not drag sessions out of their group. A group with several floors is shown as `<group> · <team>`; a group whose only floor is its independent floor is shown by the group name alone.
+- **Order of floors:** group by group in ascending `rank` from 1F upward; within a group, teams, then spawn trees, then independent sessions. Sessions in no group keep the usual rules and sit on floors above all groups.
+- **A session claimed twice:** a listed `members` entry wins over a `match` pattern; among several of the same kind the group with the smaller rank wins (the one listed first when the ranks tie). The server records an `info` diagnostic, `supplement-group-overlap`, naming the groups and the one chosen. A group ID that a later supplement file repeats is ignored with a `supplement-group-duplicate` diagnostic.
+- **Sub-agents:** a session that no group claims but that a grouped session spawned natively follows its spawn parent into the group, so a spawn tree stays together.
+- **Without `groups`** nothing changes: the snapshot has no `groups` key and the floors are exactly those described above. A session or pattern that names nothing existing is simply ignored.
+
+### Excluding sessions
+
+The optional top-level `exclude` object leaves retired sessions out of the viewer altogether. `archived: true` on its own only marks a session inactive, so it still shows under the `all` activity filter and keeps its floor; a session that is excluded is not there at all.
+
+| Field | Meaning |
+| --- | --- |
+| `archived` | `true` leaves out every session this file marks `archived: true`, also when the session's observed name no longer equals the name in the file (the rename rule that ignores `archived` for a session's inactive display does not apply here). Optional, default `false` |
+| `match` | Name patterns with the same syntax as a group's `match` (`*` any run of characters, `?` one character, anything else literal, case ignored) (optional) |
+| `unlisted` | `true` also leaves out every observed session that no supplement file lists in `sessions` (optional, default `false`). Needs `project` |
+| `project` | Project pattern (same syntax; `*` for every project) that `unlisted` is limited to, compared with the session's project: the `project` of its supplement entry, else the folder name of its working directory. Required when `unlisted` is `true` |
+
+```json
+"exclude": { "archived": true, "unlisted": true, "project": "my-project", "match": ["my-project-*-g??", "my-project-* (g??)"] }
+```
+
+Rules:
+
+- **Removed on the server.** The server drops the sessions before it builds anything else, so the browser never receives them. They are gone from the sessions list, floors, activity and status counts, relations (every relation that touches one is dropped) and conflicts, whatever the activity filter says.
+- **Sub-agents go with their session.** A session spawned natively by an excluded session is excluded too, and so on down the tree, unless another session that stays also spawned it or a supplement file lists it.
+- **A pattern is tried against the current name only, not against aliases.** An alias is an older or another name: a session that was retired as `x-g01` and revived under its old name `x` still has `x-g01` as an alias and must not vanish. Use `*-g??` style patterns for observed older generations that the supplement does not list.
+- **A listed session wins over a pattern.** A session that a supplement lists in `sessions` without `archived: true` is never left out by a pattern (the same precedence as a listed group member over a group pattern), as long as its listed name is still the session's observed name. To leave a listed session out, mark it `archived: true`.
+- **Unlisted sessions.** With `unlisted: true` the session list a supplement file gives (`sessions`) is the whole truth for the named project: an observed session of that project that no supplement file lists is left out, and so are its sub-agents. The only thing that spares it is being spawned (natively, through `spawn` relations, directly or through spawned sessions) by a listed session that stays; its name or a group pattern does not. A listed session that is itself left out (`archived`, `match`) takes its sub-agents with it, but a listed session spawned by an excluded one stays. Without the project limit the setting would hide every other project's sessions, so `project` is required (use `*` to mean all).
+- **Several files add up.** `archived` is on when any file turns it on, and the patterns of all files are used.
+- **Diagnostic.** When anything is left out the server adds one `info` diagnostic, `supplement-exclude`, with the counts (sessions marked archived, sessions matched by name, sessions outside the session map when `unlisted` is on, sub-agents) and, in its `excluded` list (at most 200 entries), the id, name and reason of each directly excluded session.
+- **Without `exclude`** nothing changes: no session is left out and the snapshot carries no such diagnostic.
 
 ## Tests
 

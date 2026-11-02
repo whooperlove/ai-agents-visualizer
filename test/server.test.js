@@ -224,6 +224,71 @@ Test('supplement problems reach the browser as whole message tokens, bounded in 
   });
 });
 
+Test('a supplement with groups reaches the browser: groups on the snapshot and a group on each claimed session', function(t, done)
+{
+  const home = tempHome(t);
+  const supplementPath = Path.join(home, 'groups.json');
+  Fs.writeFileSync(supplementPath, JSON.stringify({ schemaVersion: 1, sessions: [{ id: 'codex:one', name: 'worker-one' }, { id: 'codex:two', name: 'loose' }], relations: [], groups: [{ id: 'workers', name: 'Workers', rank: 3, match: ['worker-*'] }] }));
+  const app = Server.createObserverServer({ home: home, port: 0, pollIntervalMs: 250, supplements: [supplementPath] });
+  t.after(function(context, next) { app.stop(next); });
+  app.start(function(error)
+  {
+    Assert.ifError(error);
+    const started = Date.now();
+    const timer = setInterval(function()
+    {
+      const snapshot = app.snapshot();
+      if (!snapshot.groups)
+      {
+        if (Date.now() - started > 5000) { clearInterval(timer); done(new Error('groups never appeared')); }
+        return;
+      }
+      clearInterval(timer);
+      const parsed = JSON.parse(JSON.stringify(snapshot));
+      Assert.deepEqual(parsed.groups, [{ id: 'workers', name: 'Workers', rank: 3 }]);
+      Assert.equal(parsed.nodes.find(function(item) { return item.id === 'codex:one'; }).group, 'workers');
+      Assert.equal('group' in parsed.nodes.find(function(item) { return item.id === 'codex:two'; }), false);
+      done();
+    }, 20);
+  });
+});
+
+Test('a supplement with exclude keeps the left-out sessions out of the snapshot the browser downloads, and says how many in one diagnostic', function(t, done)
+{
+  const home = tempHome(t);
+  const supplementPath = Path.join(home, 'exclude.json');
+  Fs.writeFileSync(supplementPath, JSON.stringify({ schemaVersion: 1, sessions: [{ id: 'codex:retired', name: 'retired-one', archived: true }, { id: 'codex:live', name: 'live-one' }], relations: [{ id: 'm1', from: 'codex:live', to: 'codex:retired', type: 'management' }], exclude: { archived: true } }));
+  const app = Server.createObserverServer({ home: home, port: 0, pollIntervalMs: 250, supplements: [supplementPath] });
+  t.after(function(context, next) { app.stop(next); });
+  app.start(function(error, address)
+  {
+    Assert.ifError(error);
+    const started = Date.now();
+    const timer = setInterval(function()
+    {
+      const found = app.snapshot().diagnostics.some(function(item) { return item.code === 'supplement-exclude'; });
+      if (!found)
+      {
+        if (Date.now() - started > 5000) { clearInterval(timer); done(new Error('the exclude diagnostic never appeared')); }
+        return;
+      }
+      clearInterval(timer);
+      get(address.port, { path: '/api/snapshot', headers: { host: '127.0.0.1:' + address.port } }, function(requestError, response, body)
+      {
+        Assert.ifError(requestError);
+        const parsed = JSON.parse(body);
+        Assert.deepEqual(parsed.nodes.map(function(item) { return item.id; }), ['codex:live']);
+        Assert.equal(parsed.edges.length, 0);
+        const item = parsed.diagnostics.find(function(diagnostic) { return diagnostic.code === 'supplement-exclude'; });
+        Assert.equal(item.level, 'info');
+        Assert.deepEqual(item.excluded, [{ id: 'codex:retired', name: 'retired-one', reason: 'archived' }]);
+        Assert.match(BrowserI18n.resolve(item.message, 'ko'), /뺀 세션: 1개\(은퇴 표시 1개, 이름 패턴 0개\)/);
+        done();
+      });
+    }, 20);
+  });
+});
+
 Test('HTTP error bodies are plain text in the process locale', function(t, done)
 {
   const home = tempHome(t);
